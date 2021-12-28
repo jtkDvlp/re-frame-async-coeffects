@@ -35,7 +35,7 @@
 (defn- run-acofx!
   [coeffects {:keys [handler args-fn]}]
   (->> coeffects
-       (apply args-fn)
+       (args-fn)
        (apply handler coeffects)))
 
 (defn- run-acofxs!
@@ -88,13 +88,13 @@
 
       (and (vector? cofx) (fn? (second cofx)))
       {:id (first cofx)
-       :handler (get-handler kind cofx)
-       :args-fn #(apply (second cofx) % (rest cofx)) }
+       :handler (get-handler kind (first cofx))
+       :args-fn #(apply (second cofx) % (nnext cofx))}
 
       :else
       {:id (first cofx)
        :handler (get-handler kind (first cofx))
-       :args-fn (constantly (rest cofx))})))
+       :args-fn (constantly (next cofx))})))
 
 (defn inject-acofx
   "Given async-coeffects (acofxs) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
@@ -103,11 +103,9 @@
 
   Give a map instead of multiple acofxs like `{:acofxs [...]}` to carry a `:error-dispatch` vector. `error-dispatch` will be called on error of any acofxs, event will be aborted.
 
-  The previous association of a `async coeffect handler` with an `id` will have
-  happened via a call to `reg-acofx` - generally on program startup.
+  The previous association of a `async coeffect handler` with an `id` will have happened via a call to `reg-acofx` - generally on program startup.
 
-  Within the created interceptor, this 'looked up' `async coeffect handler` will
-  be called (within the `:before`) with arguments:
+  Within the created interceptor, this 'looked up' `async coeffect handler` will be called (within the `:before`) with arguments:
 
   - the current value of `:coeffects`
   - optionally, the given or computed args by `args` or `args-fn`
@@ -141,20 +139,13 @@
 
   **Background**
 
-  `coeffects` are the input resources required by an event handler
-  to perform its job. The two most obvious ones are `db` and `event`.
-  But sometimes an event handler might need other resources maybe async
-  resources.
+  `coeffects` are the input resources required by an event handler to perform its job. The two most obvious ones are `db` and `event`. But sometimes an event handler might need other resources maybe async resources.
 
   Perhaps an event handler needs data from backend or some other async call.
 
-  If an event handler directly accesses these resources, it stops being
-  pure and, consequently, it becomes harder to test, etc. So we don't
-  want that.
+  If an event handler directly accesses these resources, it stops being pure and, consequently, it becomes harder to test, etc. So we don't want that.
 
-  Instead, the interceptor created by this function is a way to 'inject'
-  'necessary resources' into the `:coeffects` (map) subsequently given
-  to the event handler at call time.
+  Instead, the interceptor created by this function is a way to 'inject' 'necessary resources' into the `:coeffects` (map) subsequently given to the event handler at call time.
 
   See also `reg-acofx`
   "

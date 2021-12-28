@@ -5,7 +5,7 @@
 
    [goog.dom :as gdom]
    [reagent.dom :as rdom]
-   [re-frame.core :refer [reg-event-fx dispatch reg-sub subscribe reg-cofx inject-cofx] :as rf]
+   [re-frame.core :refer [reg-event-fx reg-event-db dispatch reg-sub subscribe reg-cofx inject-cofx] :as rf]
 
    [jtk-dvlp.re-frame.async-coeffects :refer [reg-acofx inject-acofx]]))
 
@@ -13,32 +13,79 @@
 (reg-acofx ::async-now
   (fn [coeffects delay-in-ms]
     (go
-      (let [start (js/Date.)]
-        (<! (timeout (or delay-in-ms 1000)))
-        (assoc coeffects ::async-now  {:start start, :end (js/Date.)})))))
+      (let [delay-in-ms
+            (or delay-in-ms 1000)
+
+            start
+            (js/Date.)]
+
+        (when (> delay-in-ms 10000)
+          (throw (ex-info "too long delay!" {:code :too-long-delay})))
+
+        (<! (timeout delay-in-ms))
+        (assoc
+         coeffects
+         [::async-now delay-in-ms]
+         {:start start, :end (js/Date.)})))))
 
 (reg-cofx ::now
   (fn [coeffects]
     (assoc coeffects ::now (js/Date.))))
 
 (reg-event-fx ::take-timestamp
-  [(inject-acofx ::async-now)
+  [(inject-acofx
+    {:acofxs
+     [::async-now
+      [::async-now
+       5000]
+      [::async-now
+       (fn [{:keys [db] :as x}] [(get db ::delay 0)])]
+      [::async-now
+       (fn [{:keys [db] :as x} multiply] [(* multiply (get db ::delay 0))])
+       0.5]]
+     :error-dispatch [::change-message "ahhhhhh!"]}
+    ,,,)
    (inject-cofx ::now)]
-  (fn [{:keys [db ::now ::async-now]} _]
-    (->> {:now now :async-now async-now}
-         (update db ::timestamps (fnil conj []))
-         (hash-map :db))))
+  (fn [{:keys [db] :as cofxs} _]
+    (let [timestamps
+          (dissoc cofxs :db :event :original-event)]
+
+      {:db
+       (-> db
+           (update ::timestamps (fnil conj []) timestamps)
+           (assoc ::message nil))})))
 
 (reg-sub ::taken-timestamps
   (fn [db]
     (reverse (::timestamps db))))
 
+(reg-event-db ::change-delay
+  (fn [db [_ delay]]
+    (assoc db ::delay delay)))
+
+(reg-sub ::delay
+  (fn [db]
+    (::delay db 0)))
+
+(reg-event-db ::change-message
+  (fn [db [_ message & more]]
+    (assoc db ::message [message more])))
+
+(reg-sub ::message
+  (fn [db]
+    (::message db)))
+
 (defn app-view
   []
   [:<>
+   [:p (str @(subscribe [::message]))]
    [:button
     {:on-click #(dispatch [::take-timestamp])}
     "take timestamp"]
+   [:input
+    {:type :number
+     :value @(subscribe [::delay])
+     :on-change #(rf/dispatch-sync [::change-delay (-> % .-target .-value)])}]
    [:ul
     (for [timestamp @(subscribe [::taken-timestamps])]
       ^{:key timestamp}
