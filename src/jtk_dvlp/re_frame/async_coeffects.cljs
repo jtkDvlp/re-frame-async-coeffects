@@ -2,26 +2,68 @@
   (:require
    [cljs.core.async]
    [jtk-dvlp.async :refer [<!] :as a]
-   [jtk-dvlp.async.interop.promise :refer [promise-go]]
-   [re-frame.core :refer [dispatch]]
+   [jtk-dvlp.async.interop.promise :refer [promise-go promise-chan]]
+   [re-frame.core :refer [dispatch reg-fx reg-event-fx]]
    [re-frame.registrar :refer [register-handler get-handler]]
-   [re-frame.interceptor  :refer [->interceptor]]))
+   [re-frame.interceptor :refer [->interceptor]]
+   [re-frame.fx :as fx]))
 
 
 (def kind :acofx)
 
 (defn reg-acofx
-  "Register the given async-coeffect `handler` for the given `id`, for later use
-  within `inject-acofx`:
+  "Register the given async-coeffect `handler` for the given `id`, for later use within `inject-acofx`:
 
     - `id` is keyword, often namespaced.
-    - `handler` is a function which takes either one or more arguements, the first of which is
-       always `coeffects` and which returns an updated `coeffects` as `cljs.core.async/promise-chan`.
+    - `handler` is a function which takes either one or more arguements, the first of which is always `coeffects` and which returns an updated `coeffects` as `cljs.core.async/promise-chan`.
 
   See also: `inject-acofx`
   "
   [id handler]
   (register-handler kind id handler))
+
+(reg-fx ::put-on-chan
+  (fn [[chan data]]
+    (cljs.core.async/put! chan data)))
+
+(reg-event-fx ::acofx-by-fx-success
+  (fn [_ [_ result data]]
+    {::put-on-chan [result data]}))
+
+(reg-event-fx ::acofx-by-fx-error
+  (fn [_ [_ result data]]
+    (let [data
+          (cond->> data
+            (not (a/exception? data))
+            (ex-info "acofx error" {:code :acofx-error}))]
+      {::put-on-chan [result data]})))
+
+(defn reg-acofx-by-fx
+  "Register the given effect `fx` as coeffect for the given `id`, for later use within `inject-acofx`:
+
+    - `id` is keyword, often namespaced.
+    - `fx` is the effect id to use as coeffect.
+    - `on-success-key` is the key of `fx` to register a success event vector.
+    - `on-error-key` is the key of `fx` to register a error event vector (optional).
+
+  See also: `inject-acofx`
+  "
+  [id fx on-success-key & on-error-key]
+  (reg-acofx id
+    (fn [_ & [fx-map & rest-args]]
+      (let [result-chan
+            (promise-chan)
+
+            hook-map
+            (cond-> {on-success-key [::acofx-by-fx-success result-chan]}
+              on-error-key
+              (assoc on-error-key [::acofx-by-fx-error result-chan]))
+
+            handler
+            (get-handler fx/kind fx)]
+
+        (apply handler (merge fx-map hook-map) rest-args)
+        result-chan))))
 
 (defonce ^:private !results
   (atom {}))
