@@ -13,6 +13,10 @@
    [jtk-dvlp.re-frame.async-coeffects :refer [reg-acofx reg-acofx-by-fx inject-acofx]]))
 
 
+(reg-cofx ::now
+  (fn [coeffects]
+    (assoc coeffects ::now (js/Date.))))
+
 (reg-acofx ::async-now
   (fn [coeffects delay-in-ms]
     (go
@@ -30,13 +34,6 @@
          coeffects ::async-now
          {:start start, :end (js/Date.)})))))
 
-(reg-acofx-by-fx ::http-request
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :response-format (ajax/json-response-format {:keywords? true})})
-
 (reg-acofx-by-fx ::github-repo-meta
   :http-xhrio
   :on-success
@@ -45,9 +42,12 @@
    :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
    :response-format (ajax/json-response-format {:keywords? true})})
 
-(reg-cofx ::now
-  (fn [coeffects]
-    (assoc coeffects ::now (js/Date.))))
+(reg-acofx-by-fx ::http-request
+  :http-xhrio
+  :on-success
+  :on-failure
+  {:method :get
+   :response-format (ajax/json-response-format {:keywords? true})})
 
 (reg-event-fx ::do-async-stuff
   [(inject-acofx
