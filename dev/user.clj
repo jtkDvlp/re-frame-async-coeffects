@@ -4,4 +4,8 @@
 
 (defn fig-init
   []
-  (figwheel.main.api/start "dev"))
+  (figwheel/start {:mode :serve} "dev"))
+
+(defn cljs-repl
+  []
+  (figwheel/cljs-repl "dev"))

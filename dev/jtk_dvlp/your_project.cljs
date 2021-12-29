@@ -1,5 +1,8 @@
 (ns ^:figwheel-hooks jtk-dvlp.your-project
   (:require
+   [cljs.pprint]
+   [ajax.core :as ajax]
+   [day8.re-frame.http-fx]
    [cljs.core.async :refer [timeout]]
    [jtk-dvlp.async :refer [go <!]]
 
@@ -7,7 +10,7 @@
    [reagent.dom :as rdom]
    [re-frame.core :refer [reg-event-fx reg-event-db dispatch reg-sub subscribe reg-cofx inject-cofx] :as rf]
 
-   [jtk-dvlp.re-frame.async-coeffects :refer [reg-acofx inject-acofx]]))
+   [jtk-dvlp.re-frame.async-coeffects :refer [reg-acofx reg-acofx-by-fx inject-acofx]]))
 
 
 (reg-acofx ::async-now
@@ -24,40 +27,75 @@
 
         (<! (timeout delay-in-ms))
         (assoc
-         coeffects
-         [::async-now delay-in-ms]
+         coeffects ::async-now
          {:start start, :end (js/Date.)})))))
+
+(reg-acofx-by-fx ::http-request
+  :http-xhrio
+  :on-success
+  :on-failure
+  {:method :get
+   :response-format (ajax/json-response-format {:keywords? true})})
+
+(reg-acofx-by-fx ::github-repo-meta
+  :http-xhrio
+  :on-success
+  :on-failure
+  {:method :get
+   :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
+   :response-format (ajax/json-response-format {:keywords? true})})
 
 (reg-cofx ::now
   (fn [coeffects]
     (assoc coeffects ::now (js/Date.))))
 
-(reg-event-fx ::take-timestamp
+(reg-event-fx ::do-async-stuff
   [(inject-acofx
     {:acofxs
-     [::async-now
+     {::async-now
+      ::async-now
+
+      ::async-now-5-secs-delayed
       [::async-now
        5000]
+
+      ::async-now-x-secs-delayed
       [::async-now
        (fn [{:keys [db] :as x}] [(get db ::delay 0)])]
+
+      ::async-now-xDIV2-secs-delayed
       [::async-now
        (fn [{:keys [db] :as x} multiply] [(* multiply (get db ::delay 0))])
-       0.5]]
+       0.5]
+
+      ::github-repo-meta
+      ::github-repo-meta
+
+      ::re-frame-tasks-meta
+      [::http-request {:uri "https://api.github.com/repos/jtkDvlp/re-frame-tasks"}]
+
+      ::core.async-helpers-meta
+      [::http-request {:uri "https://api.github.com/repos/jtkDvlp/core.async-helpers"}]}
+
      :error-dispatch [::change-message "ahhhhhh!"]}
     ,,,)
    (inject-cofx ::now)]
   (fn [{:keys [db] :as cofxs} _]
-    (let [timestamps
-          (dissoc cofxs :db :event :original-event)]
+    (let [async-computed-results
+          (-> cofxs
+              (update ::github-repo-meta (comp :description))
+              (update ::re-frame-tasks-meta (comp :description))
+              (update ::core.async-helpers-meta (comp :description))
+              (dissoc :db :event :original-event))]
 
       {:db
        (-> db
-           (update ::timestamps (fnil conj []) timestamps)
+           (update ::async-computed-results (fnil conj []) async-computed-results)
            (assoc ::message nil))})))
 
-(reg-sub ::taken-timestamps
+(reg-sub ::async-computed-results
   (fn [db]
-    (reverse (::timestamps db))))
+    (reverse (::async-computed-results db))))
 
 (reg-event-db ::change-delay
   (fn [db [_ delay]]
@@ -80,14 +118,14 @@
   [:<>
    [:p (str @(subscribe [::message]))]
    [:button
-    {:on-click #(dispatch [::take-timestamp])}
+    {:on-click #(dispatch [::do-async-stuff])}
     "take timestamp"]
    [:input
     {:type :number
      :value @(subscribe [::delay])
      :on-change #(rf/dispatch-sync [::change-delay (-> % .-target .-value)])}]
    [:ul
-    (for [timestamp @(subscribe [::taken-timestamps])]
+    (for [timestamp @(subscribe [::async-computed-results])]
       ^{:key timestamp}
       [:li
        [:pre

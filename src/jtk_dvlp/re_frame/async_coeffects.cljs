@@ -1,8 +1,11 @@
 (ns jtk-dvlp.re-frame.async-coeffects
   (:require
+   [clojure.set :refer [rename-keys]]
+
    [cljs.core.async]
-   [jtk-dvlp.async :refer [<!] :as a]
+   [jtk-dvlp.async :refer [go <!] :as a]
    [jtk-dvlp.async.interop.promise :refer [promise-go promise-chan]]
+
    [re-frame.core :refer [dispatch reg-fx reg-event-fx]]
    [re-frame.registrar :refer [register-handler get-handler]]
    [re-frame.interceptor :refer [->interceptor]]
@@ -45,12 +48,13 @@
     - `fx` is the effect id to use as coeffect.
     - `on-success-key` is the key of `fx` to register a success event vector.
     - `on-error-key` is the key of `fx` to register a error event vector (optional).
+    - `fx-map` is a predefined map to configure the fx as the fx supports
 
   See also: `inject-acofx`
   "
-  [id fx on-success-key & on-error-key]
+  [id fx on-success-key & [on-error-key fx-map]]
   (reg-acofx id
-    (fn [_ & [fx-map & rest-args]]
+    (fn [coeffects & [fx-map' & rest-args]]
       (let [result-chan
             (promise-chan)
 
@@ -62,8 +66,8 @@
             handler
             (get-handler fx/kind fx)]
 
-        (apply handler (merge fx-map hook-map) rest-args)
-        result-chan))))
+        (apply handler (merge fx-map fx-map' hook-map) rest-args)
+        (a/map (partial assoc coeffects id) [result-chan])))))
 
 (defonce ^:private !results
   (atom {}))
@@ -75,10 +79,15 @@
        (seq)))
 
 (defn- run-acofx!
-  [coeffects {:keys [handler args-fn]}]
-  (->> coeffects
-       (args-fn)
-       (apply handler coeffects)))
+  [coeffects {:keys [id data-id handler args-fn]}]
+  (go
+    (let [coeffects'
+          (->> coeffects
+               (args-fn)
+               (apply handler coeffects)
+               (<!))]
+
+      (rename-keys coeffects' {id data-id}))))
 
 (defn- run-acofxs!
   [{:keys [coeffects] :as context}
@@ -119,31 +128,42 @@
       (run-acofxs! acofxs-n-options)
       (abort-original-event)))
 
+(defn- normalize-acofx
+  [cofx]
+  (cond
+    (keyword? cofx)
+    {:id cofx
+     :handler (get-handler kind cofx)
+     :args-fn (constantly nil)}
+
+    (and (vector? cofx) (fn? (second cofx)))
+    {:id (first cofx)
+     :handler (get-handler kind (first cofx))
+     :args-fn #(apply (second cofx) % (nnext cofx))}
+
+    :else
+    {:id (first cofx)
+     :handler (get-handler kind (first cofx))
+     :args-fn (constantly (next cofx))}))
+
 (defn- normalize-acofxs
   [acofxs]
-  (for [cofx acofxs]
-    (cond
-      (keyword? cofx)
-      {:id cofx
-       :handler (get-handler kind cofx)
-       :args-fn (constantly nil)}
-
-      (and (vector? cofx) (fn? (second cofx)))
-      {:id (first cofx)
-       :handler (get-handler kind (first cofx))
-       :args-fn #(apply (second cofx) % (nnext cofx))}
-
-      :else
-      {:id (first cofx)
-       :handler (get-handler kind (first cofx))
-       :args-fn (constantly (next cofx))})))
+  (if (map? acofxs)
+    (for [[data-id cofx] acofxs]
+      (-> cofx
+          (normalize-acofx)
+          (assoc :data-id data-id)))
+    (for [cofx acofxs
+          :let [{:keys [id] :as cofx}
+                (normalize-acofx cofx)]]
+      (assoc cofx :data-id id))))
 
 (defn inject-acofx
   "Given async-coeffects (acofxs) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
 
   Give as much acofxs as you want to compute async (pseudo parallel) values via `id` of the acofx or an vector of `id` and a seq of `args` or `id`, `args-fn` and `args`. `args` will be applied to acofx handler unless give `args-fn`, then `args` will be applied to `args-fn`. Result of `args-fn` will be applied to acofx-handler. Both acofx-handler and `args-fn` first argument will be coeffects map.
 
-  Give a map instead of multiple acofxs like `{:acofxs [...]}` to carry a `:error-dispatch` vector. `error-dispatch` will be called on error of any acofxs, event will be aborted.
+  Give a map instead of multiple acofxs like `{:acofxs ...}` to carry a `:error-dispatch` vector. `error-dispatch` will be called on error of any acofxs, event will be aborted. `:acofxs` can be given as vector or map. Use map keys to rename keys within event coeffects map.
 
   The previous association of a `async coeffect handler` with an `id` will have happened via a call to `reg-acofx` - generally on program startup.
 

@@ -34,7 +34,8 @@
 
    :dev
    {:dependencies
-    [[com.bhauman/figwheel-main "0.2.13"]]
+    [[com.bhauman/figwheel-main "0.2.13"]
+     [day8.re-frame/http-fx "0.2.3"]]
 
     :source-paths
     ["dev"]}
@@ -50,8 +51,8 @@
      :init-ns
      user
 
-     ;; :init
-     ;; (fig-init)
+     :init
+     (fig-init)
      }}}
 
   ,,,)
