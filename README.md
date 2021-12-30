@@ -9,22 +9,22 @@ re-frame interceptors to register and inject async actions as coeffects for even
 
 * register async coeffects
 * inject one or more async coeffects to events
-  * multiple async coeffects which will be synced for event calls (concurrent processing)
+  * multiple async coeffects will be synced for event calls (concurrent processing)
 * convert effects like [http-fx](https://github.com/day8/re-frame-http-fx) to async coeffect
 
 ## Motivation
 
-Often you have to request backend data via http or some other http like bridge (electron remote e.g.). Such backend request are async. Some browser / electron apis are also asyn e.g. clipboard. Such async api / backend request can be done via effect like following:
+Often you have to request backend data via http or some other http like bridge (electron remote e.g.). Such backend requests are async. Some browser / electron apis are also async e.g. clipboard. Such async api / backend request can be done via effect like following:
 
 ```clojure
 ;; maybe you have some view to init load data and/or do other preparing stuff
 (reg-event-fx ::init-my-view
   (fn [_ _]
-    ;; use effect to load the data. So you view wont be init with ::init-my-view, but it will start initializing.
+    ;; use effect to load the data. So the view wont be init with ::init-my-view, but it will start initializing.
     {:http-xhrio
       {:uri "load some data"
        ...
-       ;; the event that will do futher intializing
+       ;; the event that will do futher initialization
        :on-success [::set-my-view-data})
 
 (reg-event-fx ::set-my-view-data
@@ -36,21 +36,21 @@ Often you have to request backend data via http or some other http like bridge (
      :http-xhrio
       {:uri "load some other data"
        ...
-       ;; hopefully the finalizing initializing stuff to do, after data loaded.
+       ;; hopefully the finalizing event after data loaded.
        :on-success [::set-my-view-other-data})
 
 (reg-event-db ::set-my-view-other-data
   (fn [db} [_ backend-data]
-    ;; got the other data, put it inti db to use and do finalizing stuff to show the view correctly.
+    ;; got the other data, put it in app db to use and do finalizing stuff to show the view correctly.
     (assoc db ::other-data backend-data
     ...)
 ```
 
 So three event registrations for loading two resources and initializing a view, actualy a more or less simple task, but in my opinion a lot to write and more important to read. So imagine a more complex app with many such cases could be confusing. But one more, the two resources were load sequentially not concurrently.
 
-To get a solution for it, do one step back: From the view of an event resources are changing world values. So this is the reason why using effectts to handle it. But why via effect? Actualy effects often handle changing the world not as in the example above reading from it. But there are coeffects for reading form the changing world. So effects and coeffects represent the changing world for a re-frame app. What´s the different between effect and coeffect? Actualy the point of view from an event. Coeffect is the input and effect is the output of an event.
+To get a solution for it, do one step back: From the view of an event resources are changing world values. So this is the reason why using effectts to handle it. But why via effect? Actualy effects often handle changing the world not as in the example above reading from it. Therefore we have coeffects, for reading form the changing world. So effects and coeffects represent the changing world for a re-frame app. What´s the different between effect and coeffect? Actualy the point of view from an event. Coeffect is the input and effect is the output of an event.
 
-What do I want for my events? I want to do some stuff with backend resource to prepare my view. So actualy these resources are input data to my event like current timestamp or cookies etc. So it would be nice to get the resources as coeffects into my event.
+What do I want for my events? I want to do some stuff with backend resource to prepare my view. So actualy these resources are input data to my event like current timestamp or cookies etc. So it would be nice to get the resources as coeffects with my event.
 
 Said and done:
 
