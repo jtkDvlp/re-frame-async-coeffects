@@ -1,5 +1,5 @@
-[![Clojars Project](https://img.shields.io/clojars/v/jtk-dvlp/re-frame-async-coeffects.svg)](https://clojars.org/jtk-dvlp/re-frame-async-coeffects)
-[![cljdoc badge](https://cljdoc.org/badge/jtk-dvlp/re-frame-async-coeffects)](https://cljdoc.org/d/jtk-dvlp/re-frame-async-coeffects/CURRENT)
+[![Clojars Project](https://img.shields.io/clojars/v/net.clojars.jtkdvlp/re-frame-async-coeffects.svg)](https://clojars.org/net.clojars.jtkdvlp/re-frame-async-coeffects)
+[![cljdoc badge](https://cljdoc.org/badge/net.clojars.jtkdvlp/re-frame-async-coeffects)](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT)
 
 # re-frame-async-coeffects
 
@@ -91,7 +91,7 @@ So few benifits in my opinion:
 ### Get it / add dependency
 
 Add the following dependency to your `project.clj`:<br>
-[![Clojars Project](https://img.shields.io/clojars/v/jtk-dvlp/re-frame-async-coeffects.svg)](https://clojars.org/jtk-dvlp/re-frame-async-coeffects)
+[![Clojars Project](https://img.shields.io/clojars/v/net.clojars.jtkdvlp/re-frame-async-coeffects.svg)](https://clojars.org/net.clojars.jtkdvlp/re-frame-async-coeffects)
 
 ### Usage
 
