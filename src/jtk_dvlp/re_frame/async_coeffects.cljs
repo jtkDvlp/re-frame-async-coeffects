@@ -96,7 +96,7 @@
   (let [{:keys [original-event]}
         coeffects
 
-        acofxs
+        ?acofxs-result
         (promise-go
          (try
            (->> acofxs
@@ -112,9 +112,15 @@
                (->> e
                     (conj error-dispatch)
                     (dispatch)))
-             (throw e))))]
+             (throw e))))
 
-    (update context :acoeffects (fnil assoc {}) [original-event acofxs] acofxs)))
+        assoc-result
+        #(assoc % :?result ?acofxs-result)]
+
+    (->> acofxs
+         (map (comp (juxt :id identity) assoc-result))
+         (into {})
+         (update context :acoeffects (fnil merge {})))))
 
 (defn- abort-original-event
   [context]
