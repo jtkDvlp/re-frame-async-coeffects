@@ -101,7 +101,8 @@
          (try
            (->> acofxs
                 (map (partial run-acofx! coeffects))
-                (a/map merge)
+                (cljs.core.async/merge)
+                (a/reduce merge {})
                 (<!)
                 (swap! !results assoc [original-event acofxs]))
 

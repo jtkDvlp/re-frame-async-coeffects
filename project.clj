@@ -1,4 +1,4 @@
-(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "1.0.0"
+(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "1.0.0-SNAPSHOT"
   :description
   "A re-frame interceptors to use async actions as coeffect for events"
 
