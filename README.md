@@ -25,25 +25,25 @@ Often you have to request backend data via http or some other http like bridge (
       {:uri "load some data"
        ...
        ;; the event that will do futher initialization
-       :on-success [::set-my-view-data})
+       :on-success [::set-my-view-data]}})
 
 (reg-event-fx ::set-my-view-data
-  (fn [{:keys [db]} [_ backend-data]
+  (fn [{:keys [db]} [_ backend-data]]
      ;; got the data, put in app db to use...
-    {:db (assoc db ::data backend-data
+    {:db (assoc db ::data backend-data)
      ;; ...and mybe load further data.
      ;; WATCHOUT: you can only do one http request at a time with http-xhrio as with many effects. So you have to do it afterwards.
      :http-xhrio
       {:uri "load some other data"
        ...
        ;; hopefully the finalizing event after data loaded.
-       :on-success [::set-my-view-other-data})
+       :on-success [::set-my-view-other-data]}})
 
 (reg-event-db ::set-my-view-other-data
-  (fn [db} [_ backend-data]
+  (fn [db [_ backend-data]]
     ;; got the other data, put it in app db to use and do finalizing stuff to show the view correctly.
-    (assoc db ::other-data backend-data
-    ...)
+    (assoc db ::other-data backend-data)
+    ...))
 ```
 
 So three event registrations for loading two resources and initializing a view, actualy a more or less simple task, but in my opinion a lot to write and more important to read. So imagine a more complex app with many such cases could be confusing. But one more, the two resources were load sequentially not concurrently.
@@ -55,7 +55,6 @@ What do I want for my events? I want to do some stuff with backend resource to p
 Said and done:
 
 ```clojure
-
 ;; register the http-xhrio effect as coeffect
 (reg-acofx-by-fx ::backend-resource  ; the new async coeffect (acofx) name
   :http-xhrio ; the original effect
@@ -68,17 +67,16 @@ Said and done:
 ;; event to initialize the view using the new coeffect.
 (reg-event-fx ::init-my-view
   [(inject-acofx
-     {:acofxs
-       ;; use the backend-resource acofx twice with a certain uri and key within coeffects-map for the event
-       {:some-data [::backend-resource {:uri "load some data"}],
-        :some-other-data [::backend-resource {:uri "load some other data"}]}]
-        ;; WATCHOUT: the resources are loaded concurrently!!
-  (fn [{:keys [db some-data some-other-data} _]
+    {:acofxs
+     ;; use the backend-resource acofx twice with a certain uri and key within coeffects-map for the event
+     {:some-data [::backend-resource {:uri "load some data"}],
+      :some-other-data [::backend-resource {:uri "load some other data"}]}})]
+  ;; WATCHOUT: the resources are loaded concurrently!!
+  (fn [{:keys [db some-data some-other-data]} _]
     ;; Got all the backend data, put it into app db to use and to all initializing stuff.
     {:db (assoc db ::data some-data,
-                   ::other-data some-other-data)}
-    ...)
-
+                ::other-data some-other-data)}
+    ...))
 ```
 
 So few benifits in my opinion:
