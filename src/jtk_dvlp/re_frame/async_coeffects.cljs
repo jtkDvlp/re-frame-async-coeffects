@@ -81,13 +81,14 @@
 (defn- run-acofx!
   [coeffects {:keys [id data-id handler args-fn]}]
   (go
-    (let [coeffects'
+    (let [result
           (->> coeffects
                (args-fn)
                (apply handler coeffects)
-               (<!))]
+               (<!)
+               (#(get % id)))]
 
-      (rename-keys coeffects' {id data-id}))))
+      {data-id result})))
 
 (defn- run-acofxs!
   [{:keys [coeffects] :as context}
