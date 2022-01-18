@@ -1,15 +1,14 @@
 (ns jtk-dvlp.re-frame.async-coeffects
   (:require
-   [clojure.set :refer [rename-keys]]
-
    [cljs.core.async]
    [jtk-dvlp.async :refer [go <!] :as a]
    [jtk-dvlp.async.interop.promise :refer [promise-go promise-chan]]
 
-   [re-frame.core :refer [dispatch reg-fx reg-event-fx]]
+   [re-frame.core :refer [dispatch reg-fx reg-event-fx] :as rf]
    [re-frame.registrar :refer [register-handler get-handler]]
-   [re-frame.interceptor :refer [->interceptor]]
+   [re-frame.interceptor :refer [->interceptor] :as re-interceptor]
    [re-frame.fx :as fx]))
+
 
 
 (def kind :acofx)
@@ -64,7 +63,7 @@
               (assoc on-error-key [::acofx-by-fx-error result-chan]))
 
             handler
-            (get-handler fx/kind fx)]
+            (get-handler fx/kind fx true)]
 
         (apply handler (merge fx-map fx-map' hook-map) rest-args)
         (a/map (partial assoc coeffects id) [result-chan])))))
@@ -91,13 +90,15 @@
       {data-id result})))
 
 (defn- run-acofxs!
-  [{:keys [coeffects] :as context}
-   {:keys [error-dispatch acofxs]}]
+  [{:keys [::dispatch-id coeffects] :as context}
+   {:keys [error-dispatch acofxs] inject-id :id}]
 
-  (let [{:keys [original-event]}
-        coeffects
+  (let [event
+        (-> coeffects
+            (:event)
+            (vary-meta assoc ::dispatch-id dispatch-id))
 
-        ?acofxs-result
+        ?acofx
         (promise-go
          (try
            (->> acofxs
@@ -105,24 +106,19 @@
                 (cljs.core.async/merge)
                 (a/reduce merge {})
                 (<!)
-                (swap! !results assoc [original-event acofxs]))
+                (swap! !results assoc-in [dispatch-id inject-id]))
 
-           (dispatch original-event)
+           (dispatch event)
 
            (catch ExceptionInfo e
              (when error-dispatch
                (->> e
                     (conj error-dispatch)
                     (dispatch)))
-             (throw e))))
+             (swap! !results dissoc dispatch-id)
+             (throw e))))]
 
-        assoc-result
-        #(assoc % :?result ?acofxs-result)]
-
-    (->> acofxs
-         (map (comp (juxt :id identity) assoc-result))
-         (into {})
-         (update context :acoeffects (fnil merge {})))))
+    (assoc context ::?acofx ?acofx)))
 
 (defn- abort-original-event
   [context]
@@ -141,17 +137,17 @@
   (cond
     (keyword? cofx)
     {:id cofx
-     :handler (get-handler kind cofx)
+     :handler (get-handler kind cofx true)
      :args-fn (constantly nil)}
 
     (and (vector? cofx) (fn? (second cofx)))
     {:id (first cofx)
-     :handler (get-handler kind (first cofx))
+     :handler (get-handler kind (first cofx) true)
      :args-fn #(apply (second cofx) % (nnext cofx))}
 
     :else
     {:id (first cofx)
-     :handler (get-handler kind (first cofx))
+     :handler (get-handler kind (first cofx) true)
      :args-fn (constantly (next cofx))}))
 
 (defn- normalize-acofxs
@@ -169,7 +165,7 @@
 (defn inject-acofx
   "Given async-coeffects (acofxs) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
 
-  Give as much acofxs as you want to compute async (pseudo parallel) values via `id` of the acofx or an vector of `id` and a seq of `args` or `id`, `args-fn` and `args`. `args` will be applied to acofx handler unless give `args-fn`, then `args` will be applied to `args-fn`. Result of `args-fn` will be applied to acofx-handler. Both acofx-handler and `args-fn` first argument will be coeffects map.
+  Give as much acofxs as you want to compute async (pseudo parallel) values via `id` of the acofx or an vector of `id` and `args` or `id`, `args-fn` and `args`. `args` will be applied to acofx handler unless give `args-fn`, then `args` will be applied to `args-fn`. Result of `args-fn` will be applied to acofx-handler. Both acofx-handler and `args-fn` first argument will be coeffects map.
 
   Give a map instead of multiple acofxs like `{:acofxs ...}` to carry a `:error-dispatch` vector. `error-dispatch` will be called on error of any acofxs, event will be aborted. `:acofxs` can be given as vector or map. Use map keys to rename keys within event coeffects map.
 
@@ -221,28 +217,35 @@
   "
   ([& [map-or-acofx :as acofxs]]
 
-   (let [{:keys [acofxs] :as acofxs-n-options}
+   (let [inject-id
+         (random-uuid)
+
+         acofxs-n-options
          (if (map? map-or-acofx)
-           (update map-or-acofx :acofxs normalize-acofxs)
-           {:acofxs (normalize-acofxs acofxs)})]
+           (-> map-or-acofx
+               (update :acofxs normalize-acofxs)
+               (assoc :id inject-id))
+           {:id inject-id, :acofxs (normalize-acofxs acofxs)})]
 
      (->interceptor
       :id
       :acoeffects
 
       :before
-      (fn [{:keys [coeffects] :as context}]
-        (let [{:keys [original-event]}
-              coeffects]
-          (if-let [result (get @!results [original-event acofxs])]
+      (fn [context]
+        (let [dispatch-id
+              (or (some-> context (:coeffects) (:event) (meta) (::dispatch-id))
+                  (random-uuid))
+
+              context
+              (assoc context ::dispatch-id dispatch-id)]
+
+          (if-let [result (get-in @!results [dispatch-id inject-id])]
             (update context :coeffects merge result)
-            (run-acofxs-n-abort-event! context acofxs-n-options ))))
+            (run-acofxs-n-abort-event! context acofxs-n-options))))
 
       :after
-      (fn [{:keys [coeffects] :as context}]
-        (let [{:keys [original-event]} coeffects]
-          (if (fx-handler-run? context)
-            (do
-              (swap! !results dissoc [original-event acofxs])
-              (update context :acoeffects (fnil dissoc {}) [original-event acofxs]))
-            context)))))))
+      (fn [{:keys [::dispatch-id] :as context}]
+        (when (fx-handler-run? context)
+          (swap! !results dissoc dispatch-id))
+        context)))))
