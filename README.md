@@ -111,13 +111,13 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
             start
             (js/Date.)]
 
+        (println "acofx async-now" delay-in-ms)
         (when (> delay-in-ms 10000)
           (throw (ex-info "too long delay!" {:code :too-long-delay})))
 
         (<! (timeout delay-in-ms))
-        (assoc
-         coeffects ::async-now
-         {:start start, :end (js/Date.)})))))
+        (println "acofx async-now finished" delay-in-ms)
+        (assoc coeffects ::async-now (- (.getTime (js/Date.))(.getTime start)),)))))
 
 (reg-acofx-by-fx ::github-repo-meta
   :http-xhrio
@@ -146,11 +146,11 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
       ::async-now-x-secs-delayed
       [::async-now
-       (fn [{:keys [db] :as x}] [(get db ::delay 0)])]
+       (fn [{:keys [db]}] [(get db ::delay 0)])]
 
       ::async-now-xDIV2-secs-delayed
       [::async-now
-       (fn [{:keys [db] :as x} multiply] [(* multiply (get db ::delay 0))])
+       (fn [{:keys [db]} multiply] [(* multiply (get db ::delay 0))])
        0.5]
 
       ::github-repo-meta
