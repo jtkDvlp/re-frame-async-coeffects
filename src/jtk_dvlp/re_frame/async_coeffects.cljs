@@ -4,11 +4,10 @@
    [jtk-dvlp.async :refer [go <!] :as a]
    [jtk-dvlp.async.interop.promise :refer [promise-go promise-chan]]
 
-   [re-frame.core :refer [dispatch reg-fx reg-event-fx] :as rf]
+   [re-frame.core :refer [dispatch reg-fx reg-event-fx]]
    [re-frame.registrar :refer [register-handler get-handler]]
-   [re-frame.interceptor :refer [->interceptor] :as re-interceptor]
+   [re-frame.interceptor :refer [->interceptor]]
    [re-frame.fx :as fx]))
-
 
 
 (def kind :acofx)
@@ -90,10 +89,13 @@
       {data-id result})))
 
 (defn- run-acofxs!
-  [{:keys [::dispatch-id coeffects] :as context}
+  [{:keys [acoeffects coeffects] :as context}
    {:keys [error-dispatch acofxs] inject-id :id}]
 
-  (let [event
+  (let [dispatch-id
+        (:dispatch-id acoeffects)
+
+        event
         (-> coeffects
             (:event)
             (vary-meta assoc ::dispatch-id dispatch-id))
@@ -118,7 +120,7 @@
              (swap! !results dissoc dispatch-id)
              (throw e))))]
 
-    (assoc context ::?acofx ?acofx)))
+    (assoc-in context [:acoeffects :?result] ?acofx)))
 
 (defn- abort-original-event
   [context]
@@ -238,14 +240,17 @@
                   (random-uuid))
 
               context
-              (assoc context ::dispatch-id dispatch-id)]
+              (assoc-in context [:acoeffects :dispatch-id] dispatch-id)]
 
           (if-let [result (get-in @!results [dispatch-id inject-id])]
             (update context :coeffects merge result)
             (run-acofxs-n-abort-event! context acofxs-n-options))))
 
       :after
-      (fn [{:keys [::dispatch-id] :as context}]
+      (fn [context]
         (when (fx-handler-run? context)
-          (swap! !results dissoc dispatch-id))
+          (->> context
+               (:acoeffects)
+               (:dispatch-id)
+               (swap! !results dissoc)))
         context)))))
