@@ -120,7 +120,7 @@
              (swap! !results dissoc dispatch-id)
              (throw e))))]
 
-    (assoc-in context [:acoeffects :?result] ?acofx)))
+    (assoc-in context [:acoeffects :?error] ?acofx)))
 
 (defn- abort-original-event
   [context]
