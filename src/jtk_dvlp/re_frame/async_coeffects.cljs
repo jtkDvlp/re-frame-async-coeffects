@@ -70,18 +70,31 @@
 (defonce ^:private !results
   (atom {}))
 
+(def !global-error-dispatch
+  (atom nil))
+
+(def set-global-error-dispatch!
+  "Sets global error dispatch to prevent using advanced structure for `inject-acofx`."
+  (partial reset! !global-error-dispatch))
+
 (defn- fx-handler-run?
   [{:keys [stack]}]
   (->> stack
        (filter #(= :fx-handler (:id %)))
        (seq)))
 
+(defn- compute-argument
+  [{:keys [event] :as coeffects} arg-or-fn]
+  (if (fn? arg-or-fn)
+    (arg-or-fn coeffects event)
+    arg-or-fn))
+
 (defn- run-acofx!
-  [coeffects {:keys [id data-id handler args-fn]}]
+  [coeffects {:keys [id data-id handler args]}]
   (go
     (let [result
-          (->> coeffects
-               (args-fn)
+          (->> args
+               (mapv (partial compute-argument coeffects))
                (apply handler coeffects)
                (<!)
                (#(get % id)))]
@@ -92,7 +105,10 @@
   [{:keys [acoeffects coeffects] :as context}
    {:keys [error-dispatch acofxs] inject-id :id}]
 
-  (let [dispatch-id
+  (let [error-dispatch
+        (or error-dispatch @!global-error-dispatch)
+
+        dispatch-id
         (:dispatch-id acoeffects)
 
         event
@@ -142,15 +158,12 @@
      :handler (get-handler kind cofx true)
      :args-fn (constantly nil)}
 
-    (and (vector? cofx) (fn? (second cofx)))
+    (and (vector? cofx))
     {:id (first cofx)
      :handler (get-handler kind (first cofx) true)
-     :args-fn #(apply (second cofx) % (nnext cofx))}
+     :args (next cofx)}
 
-    :else
-    {:id (first cofx)
-     :handler (get-handler kind (first cofx) true)
-     :args-fn (constantly (next cofx))}))
+    :else cofx))
 
 (defn- normalize-acofxs
   [acofxs]
@@ -167,9 +180,9 @@
 (defn inject-acofx
   "Given async-coeffects (acofxs) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
 
-  Give as much acofxs as you want to compute async (pseudo parallel) values via `id` of the acofx or an vector of `id` and `args` or `id`, `args-fn` and `args`. `args` will be applied to acofx handler unless give `args-fn`, then `args` will be applied to `args-fn`. Result of `args-fn` will be applied to acofx-handler. Both acofx-handler and `args-fn` first argument will be coeffects map.
+  Give as much acofxs as you want to compute async (pseudo parallel) values via `id` of the acofx or an vector of `id` and `args`. `args` can be mixed of any val and fns. fns will be applied with coeffects and event. Computed args prepended with coeffects will be applied to acofx handler.
 
-  Give a map instead of multiple acofxs like `{:acofxs ...}` to carry a `:error-dispatch` vector. `error-dispatch` will be called on error of any acofxs, event will be aborted. `:acofxs` can be given as vector or map. Use map keys to rename keys within event coeffects map.
+  Give a map instead of multiple acofxs like `{:acofxs ...}` to carry a `:error-dispatch` vector, see also `set-global-error-dispatch`. `error-dispatch` will be called on error of any acofxs, event will be aborted. `:acofxs` can be given as vector or map. Use map keys to rename keys within event coeffects map.
 
   The previous association of a `async coeffect handler` with an `id` will have happened via a call to `reg-acofx` - generally on program startup.
 
