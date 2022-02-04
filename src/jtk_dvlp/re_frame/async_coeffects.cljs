@@ -70,11 +70,11 @@
 (defonce ^:private !results
   (atom {}))
 
-(def !global-error-dispatch
+(def ^:private !global-error-dispatch
   (atom nil))
 
 (def set-global-error-dispatch!
-  "Sets global error dispatch to prevent using advanced structure for `inject-acofx`."
+  "Sets global error dispatch."
   (partial reset! !global-error-dispatch))
 
 (defn- fx-handler-run?
@@ -177,70 +177,20 @@
                 (normalize-acofx cofx)]]
       (assoc cofx :data-id id))))
 
-(defn inject-acofx
-  "Given async-coeffects (acofxs) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
+(defn inject-acofxs
+  "Give as much acofxs as you want as vector or map to compute async (pseudo parallel) values. Use map keys to rename keys within event coeffects map. For further reading see `inject-acofx`."
+  ([acofxs]
+   (inject-acofxs acofxs nil))
 
-  Give as much acofxs as you want to compute async (pseudo parallel) values via `id` of the acofx or an vector of `id` and `args`. `args` can be mixed of any val and fns. fns will be applied with coeffects and event. Computed args prepended with coeffects will be applied to acofx handler.
-
-  Give a map instead of multiple acofxs like `{:acofxs ...}` to carry a `:error-dispatch` vector, see also `set-global-error-dispatch`. `error-dispatch` will be called on error of any acofxs, event will be aborted. `:acofxs` can be given as vector or map. Use map keys to rename keys within event coeffects map.
-
-  The previous association of a `async coeffect handler` with an `id` will have happened via a call to `reg-acofx` - generally on program startup.
-
-  Within the created interceptor, this 'looked up' `async coeffect handler` will be called (within the `:before`) with arguments:
-
-  - the current value of `:coeffects`
-  - optionally, the given or computed args by `args` or `args-fn`
-
-  This `coeffect handler` is expected to modify and return its first, `coeffects` argument.
-
-  **Example of `inject-acofx` and `reg-acofx` working together**
-
-
-  First - Early in app startup, you register a `async coeffect handler` for `:async-datetime`:
-
-      #!clj
-      (reg-acofx
-        :async-datetime                        ;; usage  (inject-acofx :async-datetime)
-        (fn async-coeffect-handler
-          [coeffect]
-          (go
-            (<! (timeout 1000))
-            (assoc coeffect :async-now (js/Date.)))))   ;; modify and return first arg
-
-  Second - Later, add an interceptor to an -fx event handler, using `inject-acofx`:
-
-      #!clj
-      (re-frame.core/reg-event-fx            ;; when registering an event handler
-        :event-id
-        [ ... (inject-acofx :async-datetime) ... ]  ;; <-- create an injecting interceptor
-        (fn event-handler
-          [coeffect event]
-            ;;... in here can access (:async-now coeffect) to obtain current async-datetime ...
-          )))
-
-  **Background**
-
-  `coeffects` are the input resources required by an event handler to perform its job. The two most obvious ones are `db` and `event`. But sometimes an event handler might need other resources maybe async resources.
-
-  Perhaps an event handler needs data from backend or some other async call.
-
-  If an event handler directly accesses these resources, it stops being pure and, consequently, it becomes harder to test, etc. So we don't want that.
-
-  Instead, the interceptor created by this function is a way to 'inject' 'necessary resources' into the `:coeffects` (map) subsequently given to the event handler at call time.
-
-  See also `reg-acofx`
-  "
-  ([& [map-or-acofx :as acofxs]]
+  ([acofxs {:keys [error-dispatch] :as opts}]
 
    (let [inject-id
          (random-uuid)
 
          acofxs-n-options
-         (if (map? map-or-acofx)
-           (-> map-or-acofx
-               (update :acofxs normalize-acofxs)
-               (assoc :id inject-id))
-           {:id inject-id, :acofxs (normalize-acofxs acofxs)})]
+         (->> acofxs
+              (normalize-acofxs)
+              (assoc opts :id inject-id, :acofxs))]
 
      (->interceptor
       :id
@@ -267,3 +217,62 @@
                (:dispatch-id)
                (swap! !results dissoc)))
         context)))))
+
+(defn inject-acofx
+  "Given an async-coeffect (acofx) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
+
+  As first argument give the `id` of the acofx or an vector of `id` and `args`. `args` can be mixed of any val and fns. fns will be applied with coeffects and event. Computed args prepended with coeffects will be applied to acofx handler.
+
+  As second optional argument give a map of options to carry a `:error-dispatch` vector, see also `set-global-error-dispatch`. `error-dispatch` will be called on error, event will be aborted.
+
+  The previous association of a `async coeffect handler` with an `id` will have happened via a call to `reg-acofx` - generally on program startup. See also `reg-acofx-by-fx` to reuse effects as coeffects.
+
+  Within the created interceptor, this 'looked up' `async coeffect handler` will be called (within the `:before`) with arguments:
+
+  - the current value of `:coeffects`
+  - optionally, the given or computed args by `args`
+
+  This `coeffect handler` is expected to modify and return its first, `coeffects` argument.
+
+  **Example of `inject-acofx` and `reg-acofx` working together**
+
+
+  First - Early in app startup, you register a `async coeffect handler` for `:async-now`:
+
+      #!clj
+      (reg-acofx
+        :async-now                        ;; usage  (inject-acofx :async-now)
+        (fn async-coeffect-handler
+          [coeffect]
+          (go
+            (<! (timeout 1000))
+            (assoc coeffect :async-now (js/Date.)))))   ;; modify and return first arg
+
+  Second - Later, add an interceptor to an -fx event handler, using `inject-acofx`:
+
+      #!clj
+      (re-frame.core/reg-event-fx            ;; when registering an event handler
+        :event-id
+        [ ... (inject-acofx :async-now) ... ]  ;; <-- create an injecting interceptor
+        (fn event-handler
+          [coeffect event]
+            ;;... in here can access (:async-now coeffect) to obtain current async-now ...
+          )))
+
+  **Background**
+
+  `coeffects` are the input resources required by an event handler to perform its job. The two most obvious ones are `db` and `event`. But sometimes an event handler might need other resources maybe async resources.
+
+  Perhaps an event handler needs data from backend or some other async api.
+
+  If an event handler directly accesses these resources, it stops being pure and, consequently, it becomes harder to test, etc. So we don't want that.
+
+  Instead, the interceptor created by this function is a way to 'inject' 'necessary resources' into the `:coeffects` (map) subsequently given to the event handler at call time.
+
+  See also `reg-acofx`
+  "
+  ([acofx]
+   (inject-acofx acofx nil))
+
+  ([acofx {:keys [error-dispatch] :as opts}]
+   (inject-acofxs [acofx] opts)))
