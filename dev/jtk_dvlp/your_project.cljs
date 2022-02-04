@@ -8,17 +8,17 @@
 
    [goog.dom :as gdom]
    [reagent.dom :as rdom]
-   [re-frame.core :refer [reg-event-fx reg-event-db dispatch reg-sub subscribe reg-cofx inject-cofx] :as rf]
+   [re-frame.core :as rf]
 
-   [jtk-dvlp.re-frame.async-coeffects :refer [reg-acofx reg-acofx-by-fx inject-acofx]]))
+   [jtk-dvlp.re-frame.async-coeffects :as rf-acofxs]))
 
 
-(reg-cofx ::now
+(rf/reg-cofx ::now
   (fn [coeffects]
     (println "cofx now")
     (assoc coeffects ::now (js/Date.))))
 
-(reg-acofx ::async-now
+(rf-acofxs/reg-acofx ::async-now
   (fn [coeffects delay-in-ms]
     (go
       (let [delay-in-ms
@@ -35,7 +35,7 @@
         (println "acofx async-now finished" delay-in-ms)
         (assoc coeffects ::async-now (- (.getTime (js/Date.))(.getTime start)),)))))
 
-(reg-acofx-by-fx ::github-repo-meta
+(rf-acofxs/reg-acofx-by-fx ::github-repo-meta
   :http-xhrio
   :on-success
   :on-failure
@@ -43,44 +43,40 @@
    :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
    :response-format (ajax/json-response-format {:keywords? true})})
 
-(reg-acofx-by-fx ::http-request
+(rf-acofxs/reg-acofx-by-fx ::http-request
   :http-xhrio
   :on-success
   :on-failure
   {:method :get
    :response-format (ajax/json-response-format {:keywords? true})})
 
-(reg-event-fx ::do-async-stuff
-  [(inject-acofx
-    {:acofxs
-     {::async-now
-      ::async-now
+(rf-acofxs/set-global-error-dispatch! [::change-message "ahhhhhh!"])
 
-      ::async-now-5-secs-delayed
-      [::async-now
-       5000]
+(rf/reg-event-fx ::do-work-with-async-stuff
+  [(rf-acofxs/inject-acofx ::async-now) ; Inject one single acofx without error-dispatch (global set error-dispatch will be used)
+   (rf-acofxs/inject-acofxs             ; Inject multiple acofxs and renames keys within coeffects map.
+    {::async-now*
+     ::async-now
 
-      ::async-now-x-secs-delayed
-      [::async-now
-       (fn [{:keys [db]}] [(get db ::delay 0)])]
+     ::async-now-5-secs-delayed
+     [::async-now 5000]                 ; Inject with one value arg
 
-      ::async-now-xDIV2-secs-delayed
-      [::async-now
-       (fn [{:keys [db]} multiply] [(* multiply (get db ::delay 0))])
-       0.5]
+     ::async-now-x-secs-delayed
+     [::async-now #(get-in % [:db ::delay] 0)] ; Inject with one fn arg
 
-      ::github-repo-meta
-      ::github-repo-meta
+     ::github-repo-meta
+     ::github-repo-meta
 
-      ::re-frame-tasks-meta
-      [::http-request {:uri "https://api.github.com/repos/jtkDvlp/re-frame-tasks"}]
+     ::re-frame-tasks-meta
+     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/re-frame-tasks"}]
 
-      ::core.async-helpers-meta
-      [::http-request {:uri "https://api.github.com/repos/jtkDvlp/core.async-helpers"}]}
+     ::core.async-helpers-meta
+     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/core.async-helpers"}]}
 
-     :error-dispatch [::change-message "ahhhhhh!"]}
+    {:error-dispatch [::change-message "ahhhhhh!"]} ; Overrides global set error-dispatch for these acofxs
     ,,,)
-   (inject-cofx ::now)]
+   (rf/inject-cofx ::now)               ; Inject normal cofx
+   ]
   (fn [{:keys [db] :as cofxs} _]
     (let [async-computed-results
           (-> cofxs
@@ -91,46 +87,42 @@
 
       {:db
        (-> db
-           (update ::async-computed-results (fnil conj []) async-computed-results)
+           (assoc ::async-computed-results async-computed-results)
            (assoc ::message nil))})))
 
-(reg-sub ::async-computed-results
+(rf/reg-sub ::async-computed-results
   (fn [db]
-    (reverse (::async-computed-results db))))
+    (::async-computed-results db)))
 
-(reg-event-db ::change-delay
+(rf/reg-event-db ::change-delay
   (fn [db [_ delay]]
     (assoc db ::delay delay)))
 
-(reg-sub ::delay
+(rf/reg-sub ::delay
   (fn [db]
     (::delay db 0)))
 
-(reg-event-db ::change-message
+(rf/reg-event-db ::change-message
   (fn [db [_ message & more]]
     (assoc db ::message [message more])))
 
-(reg-sub ::message
+(rf/reg-sub ::message
   (fn [db]
     (::message db)))
 
 (defn app-view
   []
   [:<>
-   [:p (str @(subscribe [::message]))]
+   [:p (str @(rf/subscribe [::message]))]
    [:button
-    {:on-click #(dispatch [::do-async-stuff])}
-    "take timestamp"]
+    {:on-click #(rf/dispatch [::do-work-with-async-stuff])}
+    "do work"]
    [:input
     {:type :number
-     :value @(subscribe [::delay])
+     :value @(rf/subscribe [::delay])
      :on-change #(rf/dispatch-sync [::change-delay (-> % .-target .-value)])}]
-   [:ul
-    (for [timestamp @(subscribe [::async-computed-results])]
-      ^{:key timestamp}
-      [:li
-       [:pre
-        (with-out-str (cljs.pprint/pprint timestamp))]])]])
+   [:pre
+    (with-out-str (cljs.pprint/pprint @(rf/subscribe [::async-computed-results])))]])
 
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
