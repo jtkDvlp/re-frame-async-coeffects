@@ -1,4 +1,4 @@
-(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "2.0.0"
+(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "3.0.0-SNAPSHOT"
   :description
   "A re-frame interceptors to use async actions as coeffect for events"
 
@@ -11,38 +11,36 @@
    :url
    "https://www.eclipse.org/legal/epl-2.0/"}
 
+  :plugins
+  [[lein-ancient "1.0.0"]]
+
   :source-paths
   ["src"]
-
-  :target-path
-  "target"
-
-  :clean-targets
-  ^{:protect false}
-  [:target-path]
 
   :profiles
   {:provided
    {:dependencies
-    [[org.clojure/clojure "1.10.0"]
-     [org.clojure/clojurescript "1.10.773"]
+    [[org.clojure/clojure "1.12.5"]
 
-     [re-frame "1.1.2"]
+     [re-frame "1.4.7"]
 
-     [org.clojure/core.async "1.3.610"]
-     [jtk-dvlp/core.async-helpers "3.0.0"]]}
+     [org.clojure/core.async "1.9.865"]
+     [jtk-dvlp/core.async-helpers "3.6.0"]]}
 
    :dev
    {:dependencies
-    [[com.bhauman/figwheel-main "0.2.13"]
-     [day8.re-frame/http-fx "0.2.3"]]
+    [[com.bhauman/figwheel-main "0.2.20"]
+     [day8.re-frame/http-fx "0.2.4"]]
 
     :source-paths
-    ["dev"]}
+    ["dev"]
+
+    :resource-paths
+    ["target"]}
 
    :repl
    {:dependencies
-    [[cider/piggieback "0.5.2"]]
+    [[cider/piggieback "0.7.0"]]
 
     :repl-options
     {:nrepl-middleware
@@ -52,7 +50,6 @@
      user
 
      :init
-     (fig-init)
-     }}}
+     (fig-init)}}}
 
   ,,,)
