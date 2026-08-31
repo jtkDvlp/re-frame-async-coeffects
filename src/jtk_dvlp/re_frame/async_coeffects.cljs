@@ -7,3 +7,54 @@
 
    [jtk-dvlp.async :as async]
    [jtk-dvlp.async.interop.promise :refer [promise-chan]]))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Registrar
+
+(def kind :acofx)
+
+(defn reg-acofx
+  "TODO"
+  [id handler]
+  (rf-registrar/register-handler kind id handler))
+
+(defn reg-acofx-by-fx
+  "TODO"
+  [id {:keys [fx-id initial-args on-success-key on-failure-key on-failure-event]}]
+  (reg-acofx id
+    (fn [cofxs inject-args]
+      (let [acofx
+            (promise-chan)
+
+            fx-hooks
+            (cond-> {on-success-key [::acofx-by-fx-success acofx]}
+              on-failure-key
+              (assoc on-failure-key
+                [::acofx-by-fx-failure acofx on-failure-event]))
+
+            fx-args
+            (merge initial-args inject-args fx-hooks)
+
+            fx-handler
+            (rf-registrar/get-handler rf-fx/kind fx-id true)]
+
+        (fx-handler fx-args)
+        acofx))))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Internal Helpers
+(rf/reg-fx ::put-on-chan
+  (fn [[chan data]]
+    (core-async/put! chan data)))
+
+(rf/reg-event-fx ::acofx-by-fx-success
+  (fn [_ [_ result data]]
+    {::put-on-chan [result-chan data]}))
+
+(rf/reg-event-fx ::acofx-by-fx-error
+  (fn [_ [_ result data]]
+    ;; TODO: Was passiert mit dem on-failure?
+    {::put-on-chan [result-chan on-failure data]}))
+
