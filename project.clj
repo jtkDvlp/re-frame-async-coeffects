@@ -17,15 +17,22 @@
   :source-paths
   ["src"]
 
+  :clean-targets
+  ^{:protect false}
+  ["target"]
+
   :profiles
   {:provided
    {:dependencies
     [[org.clojure/clojure "1.12.5"]
 
-     [re-frame "1.4.7"]
+     [re-frame "1.4.3" :exclusions [reagent]]
+     [reagent "1.3.0"]
+     [cljsjs/react "18.3.1-1"]
+     [cljsjs/react-dom "18.3.1-1"]
 
      [org.clojure/core.async "1.9.865"]
-     [jtk-dvlp/core.async-helpers "3.6.0"]]}
+     [jtk-dvlp/core.async-helpers "3.6.1"]]}
 
    :dev
    {:dependencies
@@ -40,7 +47,7 @@
 
    :repl
    {:dependencies
-    [[cider/piggieback "0.7.0"]]
+    [[cider/piggieback "0.6.1"]]
 
     :repl-options
     {:nrepl-middleware
