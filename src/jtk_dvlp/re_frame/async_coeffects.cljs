@@ -58,6 +58,14 @@
         (fx-handler fx-args)
         acofx))))
 
+(def ^:private !global-on-failure
+  (atom nil))
+
+(defn set-global-on-failure
+  "TODO"
+  [on-failure]
+  (reset! !global-on-failure on-failure))
+
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Internal Helpers
