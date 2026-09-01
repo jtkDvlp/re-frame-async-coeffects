@@ -19,6 +19,22 @@
   [id handler]
   (rf-registrar/register-handler kind id handler))
 
+(rf/reg-fx ::fill-acofx
+  (fn [[chan data]]
+    (when (some? data)
+      (core-async/put! chan data))
+    (core-async/close! chan)
+    nil))
+
+(rf/reg-event-fx ::resolve-acofx
+  (fn [_ [_ result-chan data]]
+    {::fill-acofx [result-chan data]}))
+
+(rf/reg-event-fx ::reject-acofx
+  (fn [_ [_ result-chan data]]
+    ;; TODO: Was passiert mit dem on-failure?
+    {::fill-acofx [result-chan on-failure data]}))
+
 (defn reg-acofx-by-fx
   "TODO"
   [id {:keys [fx-id initial-args on-success-key on-failure-key on-failure-event]}]
@@ -28,10 +44,10 @@
             (promise-chan)
 
             fx-hooks
-            (cond-> {on-success-key [::acofx-by-fx-success acofx]}
+            (cond-> {on-success-key [::resolve-acofx acofx]}
               on-failure-key
               (assoc on-failure-key
-                [::acofx-by-fx-failure acofx on-failure-event]))
+                [::reject-acofx acofx on-failure-event]))
 
             fx-args
             (merge initial-args inject-args fx-hooks)
