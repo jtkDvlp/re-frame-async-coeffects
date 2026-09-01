@@ -77,6 +77,43 @@
   (fn [_ [_ result data]]
     {::put-on-chan [result-chan data]}))
 
+(defn- normalize-acofx
+  [[id acofx]]
+  (assoc acofx
+    :id id
+    :inject-key (:inject-key acofx id)
+    :on-failure (:on-failure acofx @global-on-failure)))
+
+(defn- <run-acofx!
+  [{:keys [id args] :as acofx}]
+  (async/go
+    (try
+      (let [<handler
+            (rf-registrar/get-handler kind id true)
+
+            result
+            (async/<! (apply <handler args))]
+
+        (assoc acofx :inject-value result))
+
+      (catch ExceptionInfo e
+        (ex-info
+         "acofx handler failed"
+         {:code :acofx-error
+          :acofx acofx}
+         e)))))
+
+(defn- <run-acofxs!
+  [acofxs]
+  (async/go
+    (->> acofxs
+         (mapv <run-acofx!)
+         (core-async/merge)
+         (async/reduce conj [])
+         (async/<!)
+         (map (juxt :inject-key :inject-value))
+         (into {}))))
+
 (rf/reg-event-fx ::acofx-by-fx-error
   (fn [_ [_ result data]]
     ;; TODO: Was passiert mit dem on-failure?
