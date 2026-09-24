@@ -10,7 +10,7 @@ re-frame interceptors to register and inject async actions as coeffects for even
 * register async coeffects
 * inject one or more async coeffects to events
   * multiple async coeffects will be synced for event calls (concurrent processing)
-  * supports error handling via error dispatch vector (can also be set globally)
+  * supports error handling via an on-failure event (per injection, per acofx or globally)
 * convert effects like [http-fx](https://github.com/day8/re-frame-http-fx) to async coeffect
 
 ## Motivation
@@ -58,20 +58,23 @@ Said and done:
 ```clojure
 ;; register the http-xhrio effect as coeffect
 (reg-acofx-by-fx ::backend-resource  ; the new async coeffect (acofx) name
-  :http-xhrio ; the original effect
-  :on-success ; the trigger event for success
-  :on-failure ; the trigger event for failure
-  ;; and some initial config for the effect
-  {:method :get
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio         ; the original effect
+   :on-success-key :on-success ; the effect's key for the success event
+   :on-failure-key :on-failure ; the effect's key for the failure event
+   ;; and some initial config for the effect
+   :initial-args
+   {:method :get
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
 ;; event to initialize the view using the new coeffect.
 (reg-event-fx ::init-my-view
-  [(inject-acofx
-    {:acofxs
-     ;; use the backend-resource acofx twice with a certain uri and key within coeffects-map for the event
-     {:some-data [::backend-resource {:uri "load some data"}],
-      :some-other-data [::backend-resource {:uri "load some other data"}]}})]
+  ;; use the backend-resource acofx twice with a certain uri and key within
+  ;; the coeffects map of the event
+  [(inject-acofxs
+    [::backend-resource {:args [{:uri "load some data"}]
+                         :inject-key :some-data}]
+    [::backend-resource {:args [{:uri "load some other data"}]
+                         :inject-key :some-other-data}])]
   ;; WATCHOUT: the resources are loaded concurrently!!
   (fn [{:keys [db some-data some-other-data]} _]
     ;; Got all the backend data, put it into app db to use and to all initializing stuff.
@@ -104,10 +107,10 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [coeffects delay-in-ms]
+  (fn [{:keys [db]} & [delay-in-ms]]
     (go
       (let [delay-in-ms
-            (or delay-in-ms 1000)
+            (or delay-in-ms (::delay db) 1000)
 
             start
             (js/Date.)]
@@ -118,56 +121,60 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
         (<! (timeout delay-in-ms))
         (println "acofx async-now finished" delay-in-ms)
-        (assoc coeffects ::async-now (- (.getTime (js/Date.))(.getTime start)),)))))
+        (- (.getTime (js/Date.)) (.getTime start))))))
 
 (rf-acofxs/reg-acofx-by-fx ::github-repo-meta
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args
+   {:method :get
+    :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
 (rf-acofxs/reg-acofx-by-fx ::http-request
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args
+   {:method :get
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
-(rf-acofxs/set-global-error-dispatch! [::change-message "ahhhhhh!"])
+;; Dispatched on any failure no injection or handler names an event for.
+(rf-acofxs/set-global-on-failure-event [::change-message "ahhhhhh!"])
+
+(defn- repo-meta-request
+  [repo inject-key]
+  {:args [{:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}]
+   :inject-key inject-key})
 
 (rf/reg-event-fx ::do-work-with-async-stuff
-  [(rf-acofxs/inject-acofx ::async-now) ; Inject one single acofx without error-dispatch (global set error-dispatch will be used)
-   (rf-acofxs/inject-acofxs             ; Inject multiple acofxs and renames keys within coeffects map.
-    {::async-now*
-     ::async-now
+  [;; Inject one single acofx, the global on-failure event applies.
+   (rf-acofxs/inject-acofx ::async-now)
 
-     ::async-now-5-secs-delayed
-     [::async-now 5000]                 ; Inject with one value arg
+   ;; Inject several acofxs, run concurrently.
+   (rf-acofxs/inject-acofxs
+    ;; With args and a key of its own in the coeffects.
+    [::async-now {:args [5000], :inject-key ::async-now-5-secs-delayed}]
 
-     ::async-now-x-secs-delayed
-     [::async-now #(get-in % [:db ::delay] 0)] ; Inject with one fn arg
+    ;; With its own on-failure event, instead of the global one.
+    [::github-repo-meta {:on-failure [::change-message "github failed"]}]
 
-     ::github-repo-meta
-     ::github-repo-meta
+    ;; The same acofx twice, under different keys.
+    [::http-request
+     (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)]
+    [::http-request
+     (repo-meta-request "core.async-helpers" ::core.async-helpers-meta)])
 
-     ::re-frame-tasks-meta
-     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/re-frame-tasks"}]
+   ;; An ordinary cofx, as usual.
+   (rf/inject-cofx ::now)]
 
-     ::core.async-helpers-meta
-     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/core.async-helpers"}]}
-
-    {:error-dispatch [::change-message "ahhhhhh!"]} ; Overrides global set error-dispatch for these acofxs
-    ,,,)
-   (rf/inject-cofx ::now)               ; Inject normal cofx
-   ]
   (fn [{:keys [db] :as cofxs} _]
     (let [async-computed-results
           (-> cofxs
-              (update ::github-repo-meta (comp :description))
-              (update ::re-frame-tasks-meta (comp :description))
-              (update ::core.async-helpers-meta (comp :description))
+              (update ::github-repo-meta :description)
+              (update ::re-frame-tasks-meta :description)
+              (update ::core.async-helpers-meta :description)
               (dissoc :db :event :original-event))]
 
       {:db
