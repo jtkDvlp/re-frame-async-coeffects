@@ -45,6 +45,15 @@
     :resource-paths
     ["target"]}
 
+   ;; NOTE: The library declares no ClojureScript dependency -- a consumer
+   ;; brings their own. The test run needs a compiler.
+   :test
+   {:dependencies
+    [[org.clojure/clojurescript "1.11.132"]]
+
+    :source-paths
+    ["test"]}
+
    :repl
    {:dependencies
     [[cider/piggieback "0.6.1"]]
