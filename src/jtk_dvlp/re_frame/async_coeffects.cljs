@@ -1,6 +1,7 @@
 (ns jtk-dvlp.re-frame.async-coeffects
   (:require
    [cljs.core.async :as core-async]
+
    [re-frame.core :as rf]
    [re-frame.fx :as rf-fx]
    [re-frame.registrar :as rf-registrar]
@@ -12,31 +13,52 @@
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Registrar
 
+;; TODO: Logging ergänzen
+
 (def kind :acofx)
 
 (defn reg-acofx
-  "TODO"
+  "TODO: docs
+  Muss immer eine Promise-Channel liefern. Im Fehlerfall eine Exception über den Channel übermitteln. Siehe auch jtk-dvlp.async"
   [id handler]
   (rf-registrar/register-handler kind id handler))
 
-(rf/reg-fx ::fill-acofx
+;; TODO: analog zu tasks notieren für die auto-docs
+(rf/reg-fx ::fill-fx-acofx
   (fn [[chan data]]
     (when (some? data)
       (core-async/put! chan data))
     (core-async/close! chan)
     nil))
 
-(rf/reg-event-fx ::resolve-acofx
+(rf/reg-event-fx ::resolve-fx-acofx
   (fn [_ [_ result-chan data]]
-    {::fill-acofx [result-chan data]}))
+    {::fill-fx-acofx [result-chan data]}))
 
-(rf/reg-event-fx ::reject-acofx
-  (fn [_ [_ result-chan data]]
-    ;; TODO: Was passiert mit dem on-failure?
-    {::fill-acofx [result-chan on-failure data]}))
+(defn- fx-acofx-error?
+  [ex]
+  (and
+   (instance? ExceptionInfo ex)
+   (some-> ex (ex-data) (:code) (#{::fx-acofx-error}))))
+
+(defn- ex->fx-acofx-on-failure
+  [ex]
+  (some-> ex (ex-data) (::on-failure)))
+
+(rf/reg-event-fx ::reject-fx-acofx
+  (fn [_ [_ result-chan on-failure data]]
+    (let [exception
+          (ex-info
+           "fx-acofx handler failed"
+           {:code ::fx-acofx-error
+            ::on-failure on-failure}
+           data)]
+
+      {::fill-fx-acofx [result-chan exception]})))
 
 (defn reg-acofx-by-fx
-  "TODO"
+  "TODO: docs
+   Besonderheit: Als Ergebnis wird immer das erste Argument des on-succes / on-failure übermittelt."
   [id {:keys [fx-id initial-args on-success-key on-failure-key on-failure-event]}]
   (reg-acofx id
     (fn [cofxs inject-args]
@@ -44,10 +66,10 @@
             (promise-chan)
 
             fx-hooks
-            (cond-> {on-success-key [::resolve-acofx acofx]}
+            (cond-> {on-success-key [::resolve-fx-acofx acofx]}
               on-failure-key
               (assoc on-failure-key
-                [::reject-acofx acofx on-failure-event]))
+                [::reject-fx-acofx acofx on-failure-event]))
 
             fx-args
             (merge initial-args inject-args fx-hooks)
@@ -58,31 +80,36 @@
         (fx-handler fx-args)
         acofx))))
 
-(def ^:private !global-on-failure
+(def ^:private !global-on-failure-event
   (atom nil))
 
-(defn set-global-on-failure
-  "TODO"
+(defn set-global-on-failure-event
+  "TODO: docs"
   [on-failure]
-  (reset! !global-on-failure on-failure))
+  (reset! !global-on-failure-event on-failure))
 
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Internal Helpers
-(rf/reg-fx ::put-on-chan
-  (fn [[chan data]]
-    (core-async/put! chan data)))
-
-(rf/reg-event-fx ::acofx-by-fx-success
-  (fn [_ [_ result data]]
-    {::put-on-chan [result-chan data]}))
 
 (defn- normalize-acofx
   [[id acofx]]
   (assoc acofx
     :id id
     :inject-key (:inject-key acofx id)
-    :on-failure (:on-failure acofx @global-on-failure)))
+    ;; WATCHOUT: Das nicht, weil zwischenzeitlich auf das vorhandensein geprüft wird.
+    ;; :on-failure (:on-failure acofx @global-on-failure-event)
+    ))
+
+(defn- acofx-error?
+  [ex]
+  (and
+   (instance? ExceptionInfo ex)
+   (some-> ex (ex-data) (:code) (#{::acofx-error}))))
+
+(defn- ex->acofx-on-failure
+  [ex]
+  (some-> ex (ex-data) (::on-failure)))
 
 (defn- <run-acofx!
   [{:keys [id args] :as acofx}]
@@ -96,26 +123,86 @@
 
         (assoc acofx :inject-value result))
 
-      (catch ExceptionInfo e
-        (ex-info
-         "acofx handler failed"
-         {:code :acofx-error
-          :acofx acofx}
-         e)))))
+      (catch :default e
+        (let [acofx
+              (cond-> acofx
+                (and
+                 ;; TODO: Das ist sehr stark auf fx-acofx bezogen, geht das auch allgemein?!
+                 (fx-acofx-error? e)
+                 (nil? (:on-failure acofx)))
+                (assoc :on-failure (ex->fx-acofx-on-failure e)))]
+
+          (ex-info
+           "acofx handler failed"
+           {:code ::acofx-error
+            ::acofx acofx}
+           e))))))
 
 (defn- <run-acofxs!
   [acofxs]
+  ;; TODO: fehlerbehandlung und ergebnisbehandlung sollten auf einer ebene stehen, beides nicht in der funktion
   (async/go
-    (->> acofxs
-         (mapv <run-acofx!)
-         (core-async/merge)
-         (async/reduce conj [])
-         (async/<!)
-         (map (juxt :inject-key :inject-value))
-         (into {}))))
+    (try
+      (try
+        (let [result
+              (->> acofxs
+                   (mapv <run-acofx!)
+                   (core-async/merge)
+                   (async/reduce conj [])
+                   (async/<!)
+                   (map (juxt :inject-key :inject-value))
+                   (into {}))])
 
-(rf/reg-event-fx ::acofx-by-fx-error
-  (fn [_ [_ result data]]
-    ;; TODO: Was passiert mit dem on-failure?
-    {::put-on-chan [result-chan on-failure data]}))
+        (catch ExceptionInfo ex
+          (if-let [on-failure-event
+                   (and
+                    (acofx-error? ex)
+                    (ex->acofx-on-failure ex))]
+            (rf/dispatch (conj on-failure-event ex))
+            (throw ex))))
 
+      (catch :default e
+        (if-let [on-failure-event @!global-on-failure-event]
+          (rf/dispatch (conj on-failure-event e))
+          (comment
+            ;; TODO: log error
+            ))))))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Interceptor
+
+(defn inject-acofxs
+  "TODO: docs"
+  [& acofxs]
+  ;; TODO: acofx ausführen und in atom speichern, dann event erneut triggern und acofx ergebnisse aus atom ziehen und event durchlassen. atom erst bereinigen, wenn event abgeschlossen wurde.
+  (rf/->interceptor
+   :id :acoeffect
+
+   ;; TODO: task handling berücksichtigen
+   :before
+   (fn [context]
+     (let []))
+
+   :after
+   (fn [context])))
+
+(defn inject-acofx
+  "TODO: docs"
+  {:arglists
+   '([id]
+     [id [:as args]]
+     [id {:keys [args on-failure inject-key]}])}
+
+  ([id]
+   (inject-acofx id nil))
+
+  ([id value]
+   (let [acofx
+         (cond
+           (vector? value)
+           {:args value}
+
+           :else value)]
+
+     (inject-acofxs [id acofx]))))
