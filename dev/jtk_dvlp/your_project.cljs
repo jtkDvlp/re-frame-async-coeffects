@@ -62,6 +62,7 @@
 
 (rf/reg-event-fx ::do-work-with-async-stuff
   [;; Inject one single acofx, the global on-failure event applies.
+   ;; Without args it waits for the delay set in the input.
    (rf-acofxs/inject-acofx ::async-now)
 
    ;; Inject several acofxs, run concurrently.

@@ -11,6 +11,8 @@ re-frame interceptors to register and inject async actions as coeffects for even
 * inject one or more async coeffects to events
   * multiple async coeffects will be synced for event calls (concurrent processing)
   * supports error handling via an on-failure event (per injection, per acofx or globally)
+  * effect arguments computed from the coeffects, the event and the registered configuration
+* keeps a [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks) task running while acofxs run
 * convert effects like [http-fx](https://github.com/day8/re-frame-http-fx) to async coeffect
 
 ## Motivation
@@ -150,6 +152,7 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
 (rf/reg-event-fx ::do-work-with-async-stuff
   [;; Inject one single acofx, the global on-failure event applies.
+   ;; Without args it waits for the delay set in the input.
    (rf-acofxs/inject-acofx ::async-now)
 
    ;; Inject several acofxs, run concurrently.
@@ -182,6 +185,109 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
            (assoc ::async-computed-results async-computed-results)
            (assoc ::message nil))})))
 ```
+
+### Keeping a task running (re-frame-tasks)
+
+With [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks), use the
+injections from `jtk-dvlp.re-frame.async-coeffects.tasks` after `as-task`.
+The task then keeps running while the acofxs run, `wait-for` holds other
+events back until the handler ran, and a failure ends the task. Without a
+task they behave like the plain ones.
+
+```clojure
+(ns your-project
+  (:require
+   [re-frame.core :as rf]
+   [jtk-dvlp.re-frame.tasks :as tasks]
+   [jtk-dvlp.re-frame.async-coeffects.tasks :as acofx-tasks]))
+
+(rf/reg-event-fx ::init-my-view
+  [(tasks/as-task :loading)
+   (acofx-tasks/inject-acofx ::backend-resource [{:uri "load some data"}])]
+  (fn [{:keys [db] ::keys [backend-resource]} _]
+    {:db (assoc db ::data backend-resource)}))
+```
+
+Only this namespace needs re-frame-tasks (3.x) as dependency.
+
+## Migrating from 2.x
+
+**acofx handlers return the value, not the coeffects.** The handler still
+gets the coeffects first, but the channel carries the value to inject.
+
+```clojure
+;; 2.x
+(fn [coeffects] (go (assoc coeffects ::now (js/Date.))))
+;; 3.x
+(fn [coeffects] (go (js/Date.)))
+```
+
+**`reg-acofx-by-fx` takes a map.**
+
+```clojure
+;; 2.x
+(reg-acofx-by-fx ::http :http-xhrio :on-success :on-failure {:method :get})
+;; 3.x
+(reg-acofx-by-fx ::http
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args {:method :get}})
+```
+
+`:initial-args` may also be a function of the coeffects and the event. The
+new `:on-failure-event` names the event to dispatch when the effect fails.
+
+**Injection takes `[id opts]` per acofx.** Args, the key in the coeffects
+and the failure event are options of each acofx, not of the whole
+injection. The map form of `inject-acofxs` is gone; `:inject-key` replaces
+its keys.
+
+```clojure
+;; 2.x
+(inject-acofxs {:a [::http {:uri "/a"}]
+                :b [::http {:uri "/b"}]}
+               {:error-dispatch [::failed]})
+;; 3.x
+(inject-acofxs
+ [::http {:args [{:uri "/a"}], :inject-key :a, :on-failure [::failed]}]
+ [::http {:args [{:uri "/b"}], :inject-key :b, :on-failure [::failed]}])
+
+;; 2.x
+(inject-acofx [::async-now 5000])
+;; 3.x
+(inject-acofx ::async-now [5000])
+```
+
+**Only `reg-acofx-by-fx` computes arguments.** In 2.x any injection
+argument that was a function got called with the coeffects and the event.
+Now a handler gets its arguments as given; it has the coeffects anyway.
+`reg-acofx-by-fx` computes them: its `:initial-args` may be a function of
+the coeffects and the event, and the injection argument may be a function
+that also gets the resolved `:initial-args` and returns the configuration
+to use -- so it can derive from the registration, down to removing keys:
+
+```clojure
+(inject-acofx ::http [(fn [_coeffects _event initial-args]
+                        (update initial-args :uri str "/details"))])
+```
+
+**`set-global-error-dispatch!` is now `set-global-on-failure-event`.** On
+failure the event dispatched is the injection's `:on-failure`, else the
+one the acofx handler put under `::on-failure` into its exception (for
+`reg-acofx-by-fx`: `:on-failure-event`), else the global one.
+
+**The exception appended to the failure event is wrapped.** It is an
+`ex-info` with `:code ::acofx-error` and the failed acofx under `::acofx`;
+the handler's own exception is its cause. For `reg-acofx-by-fx`, what the
+effect reported is under `:error` in the `ex-data` of that cause.
+
+**The event is dispatched again as it was dispatched** (`:original-event`),
+so interceptors like `trim-v` see it unchanged on every run.
+
+**re-frame-tasks 3.x** is supported through
+`jtk-dvlp.re-frame.async-coeffects.tasks`, see above. re-frame-tasks 2.x
+keeps working with the plain injections.
 
 ## Appendix
 
