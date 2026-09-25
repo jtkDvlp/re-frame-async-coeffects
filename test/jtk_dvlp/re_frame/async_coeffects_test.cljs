@@ -6,84 +6,18 @@
    [re-frame.core :as rf]
 
    [jtk-dvlp.async :as async]
-   [jtk-dvlp.re-frame.async-coeffects :as acofxs]))
+   [jtk-dvlp.re-frame.async-coeffects :as acofxs]
+   [jtk-dvlp.re-frame.test-helpers :as helpers
+    :refer [record-handled! !handled !failures <eventually <settle
+            run-async]]))
 
-
-;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Fixture and helpers
-
-(def ^:private !restore-re-frame
-  (atom nil))
-
-(def ^:private !handled
-  "What the event handlers under test saw, in order."
-  (atom []))
-
-(def ^:private !failures
-  "What the on-failure events under test got, in order."
-  (atom []))
 
 (def ^:private !acofx-calls
   (atom 0))
 
-(defn- record-handled!
-  [entry]
-  (swap! !handled conj entry))
-
 (use-fixtures :each
-  {:before
-   (fn []
-     (reset! !restore-re-frame (rf/make-restore-fn))
-     (reset! !handled [])
-     (reset! !failures [])
-     (reset! !acofx-calls 0)
-     (acofxs/set-global-on-failure-event nil)
-     (rf/reg-event-fx ::failed
-       (fn [_ [_ tag ex]]
-         (swap! !failures conj [tag ex])
-         {})))
-
-   :after
-   (fn []
-     (acofxs/set-global-on-failure-event nil)
-     (@!restore-re-frame))})
-
-(def ^:private eventually-limit-ms
-  "Upper bound to wait for an async outcome. Generous on purpose: the
-   acofxs under test finish within a few ms."
-  1000)
-
-(def ^:private eventually-poll-ms
-  5)
-
-(defn- <eventually
-  "Yields true as soon as `pred` holds, false after
-   `eventually-limit-ms`."
-  [pred]
-  (async/go-loop [waited-ms 0]
-    (cond
-      (pred) true
-      (> waited-ms eventually-limit-ms) false
-      :else (do
-              (async/<! (core-async/timeout eventually-poll-ms))
-              (recur (+ waited-ms eventually-poll-ms))))))
-
-(defn- <settle
-  "Gives already dispatched events the time to run, to check that
-   something did *not* happen."
-  []
-  (core-async/timeout 50))
-
-(defn- run-async
-  "Ends the async test once the go block `?test` is done, also when it
-   threw."
-  [done ?test]
-  (core-async/take!
-   ?test
-   (fn [result]
-     (when (async/exception? result)
-       (is (nil? result) "test body threw"))
-     (done))))
+  helpers/re-frame-fixture
+  {:before #(reset! !acofx-calls 0)})
 
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -107,10 +41,10 @@
     (fn [_coeffects & [handler-on-failure]]
       (async/go
         (throw
-        (ex-info "acofx under test failed"
-                 (cond-> {:code ::boom}
-                   handler-on-failure
-                   (assoc ::acofxs/on-failure handler-on-failure))))))))
+         (ex-info "acofx under test failed"
+                  (cond-> {:code ::boom}
+                    handler-on-failure
+                    (assoc ::acofxs/on-failure handler-on-failure))))))))
 
 
 ;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -168,7 +102,7 @@
             [(acofxs/inject-acofxs
               [::rendezvous {:args [:a], :inject-key :a}]
               [::rendezvous {:args [:b], :inject-key :b
-                             :on-failure [::failed :b]}])]
+                             :on-failure [::helpers/failed :b]}])]
             (fn [{:keys [a b]} _]
               (record-handled! [a b])
               {}))
@@ -245,6 +179,74 @@
         (async/<! (<settle))
         (is (empty? (parked-results)))))))
 
+(deftest forgets-parked-results-when-the-handler-throws
+  ;; A throwing handler never reaches an `:after`. Results removed only
+  ;; there stayed parked for good.
+  (async done
+    (run-async done
+      (async/go
+        (reg-test-acofxs!)
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::value [:v])]
+          (fn [_ _]
+            (throw (ex-info "handler under test failed" {}))))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @helpers/!event-errors))))
+        (is (empty? (parked-results)))))))
+
+(deftest keeps-parked-results-across-foreign-aborts
+  ;; Another interceptor after the injection may abort the run that
+  ;; already got the results -- a `wait-for`, say -- and the event comes
+  ;; back later. The results have to be there again, not the acofxs
+  ;; started over.
+  (async done
+    (run-async done
+      (async/go
+        (reg-test-acofxs!)
+        (let [!aborted? (atom false)
+
+              abort-once
+              (rf/->interceptor
+               :id ::abort-once
+               :before
+               (fn [context]
+                 (if @!aborted?
+                   context
+                   (let [event (get-in context [:coeffects :original-event])]
+                     (reset! !aborted? true)
+                     (js/setTimeout #(rf/dispatch event) 10)
+                     (update context :queue empty)))))]
+
+          (rf/reg-event-fx ::event
+            [(acofxs/inject-acofx ::value [:v]) abort-once]
+            (fn [{::keys [value]} _]
+              (record-handled! value)
+              {}))
+
+          (rf/dispatch [::event])
+          (is (async/<! (<eventually #(seq @!handled))))
+          (is (= [:v] @!handled))
+          (is (= 1 @!acofx-calls) "acofxs started over after the abort")
+          (is (empty? (parked-results))))))))
+
+(deftest passes-args-to-plain-acofxs-as-given
+  ;; Only `reg-acofx-by-fx` computes function args. Any other handler
+  ;; gets a function as the value it is.
+  (async done
+    (run-async done
+      (async/go
+        (reg-test-acofxs!)
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::value [inc])]
+          (fn [{::keys [value]} _]
+            (record-handled! value)
+            {}))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @!handled))))
+        (is (= [inc] @!handled))))))
+
 (deftest injects-from-several-interceptors
   ;; The inner interceptor aborts the run in which the outer one already
   ;; found its results. Removing them there would start the outer
@@ -318,10 +320,10 @@
   (async done
     (run-async done
       (async/go
-        (acofxs/set-global-on-failure-event [::failed :global])
+        (acofxs/set-global-on-failure-event [::helpers/failed :global])
         (async/<! (<dispatch-failing-event!
-                   {:args [[::failed :handler]]
-                    :on-failure [::failed :injection]}))
+                   {:args [[::helpers/failed :handler]]
+                    :on-failure [::helpers/failed :injection]}))
 
         (is (= [:injection] (map first @!failures)))
         (is (empty? @!handled) "handler ran despite the failure")
@@ -336,9 +338,9 @@
   (async done
     (run-async done
       (async/go
-        (acofxs/set-global-on-failure-event [::failed :global])
+        (acofxs/set-global-on-failure-event [::helpers/failed :global])
         (async/<! (<dispatch-failing-event!
-                   {:args [[::failed :handler]]}))
+                   {:args [[::helpers/failed :handler]]}))
 
         (is (= [:handler] (map first @!failures)))
         (is (empty? @!handled))))))
@@ -356,7 +358,7 @@
             (record-handled! :handler-ran)
             {}))
 
-        (acofxs/set-global-on-failure-event [::failed :global])
+        (acofxs/set-global-on-failure-event [::helpers/failed :global])
         (rf/dispatch [::event])
         (is (async/<! (<eventually #(seq @!failures))))
         (is (= [:global] (map first @!failures)))
@@ -408,7 +410,7 @@
           {:fx-id ::fake-request
            :on-success-key :on-success
            :on-failure-key :on-failure
-           :on-failure-event [::failed :registered]})
+           :on-failure-event [::helpers/failed :registered]})
 
         (rf/reg-event-fx ::event
           [(acofxs/inject-acofx ::request [{:error {:status 500}}])]
@@ -422,3 +424,61 @@
           (is (= :registered tag))
           (is (= {:status 500} (-> ex (ex-cause) (ex-data) (:error)))))
         (is (empty? @!handled))))))
+
+(deftest computes-the-initial-args-of-an-effect
+  (async done
+    (run-async done
+      (async/go
+        (reg-fake-request-fx!)
+        (acofxs/reg-acofx-by-fx ::request
+          {:fx-id ::fake-request
+           :initial-args (fn [_coeffects [_ response]] {:response response})
+           :on-success-key :on-success
+           :on-failure-key :on-failure})
+
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::request)]
+          (fn [{::keys [request]} _]
+            (record-handled! request)
+            {}))
+
+        (rf/dispatch [::event :from-event])
+        (is (async/<! (<eventually #(seq @!handled))))
+        (is (= [:from-event] @!handled))))))
+
+(deftest computes-the-injection-args-of-an-effect
+  ;; A function given at injection gets the resolved initial args and
+  ;; replaces them, so it can derive from the registered configuration --
+  ;; down to dropping a key a merge could never remove.
+  (async done
+    (run-async done
+      (async/go
+        (reg-fake-request-fx!)
+        (let [!initial-args-calls (atom 0)]
+          (acofxs/reg-acofx-by-fx ::request
+            {:fx-id ::fake-request
+             :initial-args (fn [_coeffects [_ response]]
+                             (swap! !initial-args-calls inc)
+                             {:response response
+                              :error {:status 500}})
+             :on-success-key :on-success
+             :on-failure-key :on-failure
+             :on-failure-event [::helpers/failed :request]})
+
+          (rf/reg-event-fx ::event
+            [(acofxs/inject-acofx
+              ::request
+              [(fn [_coeffects [_ suffix] initial-args]
+                 (-> initial-args
+                     (dissoc :error)
+                     (update :response vector suffix)))])]
+            (fn [{::keys [request]} _]
+              (record-handled! request)
+              {}))
+
+          (rf/dispatch [::event :from-event])
+          (is (async/<! (<eventually #(seq @!handled))))
+          (is (= [[:from-event :from-event]] @!handled))
+          (is (empty? @!failures) "the dropped :error key came back")
+          (is (= 1 @!initial-args-calls)
+              "initial args computed more than once per injection"))))))

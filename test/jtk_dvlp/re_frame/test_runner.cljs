@@ -3,7 +3,10 @@
   (:require
    [cljs.test :refer-macros [run-tests]]
 
-   [jtk-dvlp.re-frame.async-coeffects-test]))
+   [taoensso.timbre :as log]
+
+   [jtk-dvlp.re-frame.async-coeffects-test]
+   [jtk-dvlp.re-frame.async-coeffects.tasks-test]))
 
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests]
   [{:keys [fail error] :as summary}]
@@ -15,7 +18,11 @@
 
 (defn -main
   [& _]
-  (run-tests 'jtk-dvlp.re-frame.async-coeffects-test))
+  ;; NOTE: re-frame-tasks traces every step through timbre.
+  (log/set-min-level! :warn)
+  (run-tests
+   'jtk-dvlp.re-frame.async-coeffects-test
+   'jtk-dvlp.re-frame.async-coeffects.tasks-test))
 
 ;; WATCHOUT: The node target only calls `-main` when this is set. Without
 ;; it the bundle loads every namespace, runs nothing, and exits 0.
