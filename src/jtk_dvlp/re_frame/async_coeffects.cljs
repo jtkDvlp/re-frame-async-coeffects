@@ -74,46 +74,77 @@
 
         {::fill-fx-acofx [result-chan exception]}))))
 
+(defn- resolve-initial-args
+  [{:keys [event] :as coeffects} initial-args]
+  (if (fn? initial-args)
+    (initial-args coeffects event)
+    initial-args))
+
+(defn- resolve-fx-args
+  "The effect's configuration for one injection: `inject-args` merged over
+   the `initial-args`, or -- given as function -- whatever it makes of
+   them."
+  [{:keys [event] :as coeffects} initial-args inject-args]
+  (let [initial-args (resolve-initial-args coeffects initial-args)]
+    (if (fn? inject-args)
+      (inject-args coeffects event initial-args)
+      (merge initial-args inject-args))))
+
+(defn- fx-acofx-handler
+  [{:keys [fx-id initial-args on-success-key on-failure-key
+           on-failure-event]}]
+  (fn [coeffects & [inject-args]]
+    (let [acofx
+          (promise-chan)
+
+          fx-hooks
+          (cond-> {on-success-key [::resolve-fx-acofx acofx]}
+            on-failure-key
+            (assoc on-failure-key
+              [::reject-fx-acofx acofx on-failure-event]))
+
+          fx-args
+          (-> coeffects
+              (resolve-fx-args initial-args inject-args)
+              (merge fx-hooks))
+
+          fx-handler
+          (rf-registrar/get-handler rf-fx/kind fx-id true)]
+
+      (fx-handler fx-args)
+      acofx)))
+
 (defn reg-acofx-by-fx
   "Registers the effect `fx-id` as acofx under `id`, so an effect that
    reports its result through events (e.g. `:http-xhrio`) can be injected
    like any other acofx.
 
-   - `initial-args` is the effect's base configuration.
+   - `initial-args` is the effect's base configuration: a map, or a
+     function of the event's `coeffects` and the event that returns one.
    - `on-success-key` is the effect's key for the success event.
    - `on-failure-key` is the effect's key for the failure event
      (optional; without it a failure is never noticed).
    - `on-failure-event` is the event to dispatch on failure (optional),
      see `inject-acofxs` for the precedence.
 
-   The first `:args` value given at injection is merged over
-   `initial-args`.
+   The first `:args` value given at injection configures the effect for
+   that injection:
+
+   - a map is merged over `initial-args`,
+   - a function is called with the `coeffects`, the event and the
+     resolved `initial-args`, and what it returns replaces them -- so it
+     can derive from the registered configuration, down to removing
+     keys.
 
    WATCHOUT: Only the first argument the effect hands to its success or
    failure event is taken as result -- that is what `:http-xhrio` and
    most effects use. The failure's argument ends up under `:error` in the
    `ex-data` of the exception."
-  [id {:keys [fx-id initial-args on-success-key on-failure-key
-              on-failure-event]}]
-  (reg-acofx id
-    (fn [_coeffects inject-args]
-      (let [acofx
-            (promise-chan)
-
-            fx-hooks
-            (cond-> {on-success-key [::resolve-fx-acofx acofx]}
-              on-failure-key
-              (assoc on-failure-key
-                [::reject-fx-acofx acofx on-failure-event]))
-
-            fx-args
-            (merge initial-args inject-args fx-hooks)
-
-            fx-handler
-            (rf-registrar/get-handler rf-fx/kind fx-id true)]
-
-        (fx-handler fx-args)
-        acofx))))
+  {:arglists
+   '([id {:keys [fx-id initial-args on-success-key on-failure-key
+                 on-failure-event]}])}
+  [id options]
+  (reg-acofx id (fx-acofx-handler options)))
 
 (defonce ^:private !global-on-failure-event
   (atom nil))
@@ -341,7 +372,9 @@
    `reg-acofx` and an optional map of
 
    - `:args` -- vector of arguments to the acofx handler, after the
-     coeffects.
+     coeffects, passed as given. What a function among them means is up
+     to the handler; `reg-acofx-by-fx` computes one from the coeffects,
+     see there.
    - `:inject-key` -- the key in the coeffects, defaults to `id`. Needed
      to inject the same acofx more than once.
    - `:on-failure` -- event to dispatch on failure, the exception
