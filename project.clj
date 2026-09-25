@@ -1,6 +1,10 @@
-(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "3.0.0-SNAPSHOT"
+;; WATCHOUT: release-please owns this number, not a hand. The annotation
+;; is what it finds the line by -- without it only the changelog moves on
+;; and the package keeps the old version. What stands here is the last
+;; release; the next one is decided by the commits since.
+(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "2.0.0" ; x-release-please-version
   :description
-  "A re-frame interceptors to use async actions as coeffect for events"
+  "re-frame interceptors to use async actions as coeffects for events"
 
   :url
   "https://github.com/jtkDvlp/re-frame-async-coeffects"
@@ -16,6 +20,25 @@
 
   :source-paths
   ["src"]
+
+  :deploy-repositories
+  [["clojars"
+    {:url
+     "https://repo.clojars.org/"
+
+     ;; WATCHOUT: The credentials are repository secrets reaching the
+     ;; build through environment variables -- never a file in the repo,
+     ;; not even an ignored one.
+     :username
+     :env/clojars_username
+
+     :password
+     :env/clojars_password
+
+     ;; NOTE: No signing key in the run, and Clojars asks for no
+     ;; signature.
+     :sign-releases
+     false}]]
 
   :clean-targets
   ^{:protect false}

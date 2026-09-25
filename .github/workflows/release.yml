@@ -1,0 +1,79 @@
+name: release
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Opens or updates the release pull request. Only merging it creates the
+  # tag and the GitHub release -- and with them the outputs used below.
+  release-please:
+    runs-on: ubuntu-latest
+
+    outputs:
+      release-created: ${{ steps.release-please.outputs.release_created }}
+      tag-name: ${{ steps.release-please.outputs.tag_name }}
+
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release-please
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # WATCHOUT: Test and publish belong in the same workflow run as
+  # release-please. A release created by the GITHUB_TOKEN triggers no
+  # further workflows -- a separate `on: release` workflow would silently
+  # never run.
+  test:
+    needs: release-please
+    if: needs.release-please.outputs.release-created == 'true'
+    # NOTE: The same workflow as in CI, only against the tag. On the pull
+    # request it ran against the state before the version bump, here
+    # against the artifact about to go out.
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag-name }}
+
+  publish:
+    needs:
+      - release-please
+      - test
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # WATCHOUT: The tag, not the branch. By the time this job runs,
+          # master may already carry the next commit; what is published is
+          # exactly the state that is the release.
+          ref: ${{ needs.release-please.outputs.tag-name }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          lein: latest
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: m2-${{ hashFiles('project.clj') }}
+          restore-keys: m2-
+
+      # NOTE: Publishing cannot be undone -- Clojars does not accept the
+      # same version twice.
+      - name: Deploy to Clojars
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+        run: lein deploy clojars
