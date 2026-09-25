@@ -47,12 +47,19 @@
 
    ;; NOTE: The library declares no ClojureScript dependency -- a consumer
    ;; brings their own. The test run needs a compiler.
+   ;;
+   ;; WATCHOUT: `re-frame-tasks` 3 is not released yet. Until it is, its
+   ;; sources come from a checkout under `target/deps/` (see the CI
+   ;; workflow), and `timbre` is the dependency they bring along. Replace
+   ;; both by `[jtk-dvlp/re-frame-tasks "3.x"]` once it is on Clojars --
+   ;; also under `:provided`, where the integration namespace needs it.
    :test
    {:dependencies
-    [[org.clojure/clojurescript "1.11.132"]]
+    [[org.clojure/clojurescript "1.11.132"]
+     [com.taoensso/timbre "6.8.0"]]
 
     :source-paths
-    ["test"]}
+    ["test" "target/deps/re-frame-tasks/src"]}
 
    :repl
    {:dependencies
