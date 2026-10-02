@@ -19,10 +19,10 @@
     (assoc coeffects ::now (js/Date.))))
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [coeffects delay-in-ms]
+  (fn [{:keys [db]} {[delay-in-ms] :args}]
     (go
       (let [delay-in-ms
-            (or delay-in-ms 1000)
+            (or delay-in-ms (::delay db) 1000)
 
             start
             (js/Date.)]
@@ -33,56 +33,61 @@
 
         (<! (timeout delay-in-ms))
         (println "acofx async-now finished" delay-in-ms)
-        (assoc coeffects ::async-now (- (.getTime (js/Date.))(.getTime start)),)))))
+        (- (.getTime (js/Date.)) (.getTime start))))))
 
 (rf-acofxs/reg-acofx-by-fx ::github-repo-meta
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args
+   {:method :get
+    :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
 (rf-acofxs/reg-acofx-by-fx ::http-request
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args
+   {:method :get
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
-(rf-acofxs/set-global-error-dispatch! [::change-message "ahhhhhh!"])
+;; Dispatched on any failure no injection or handler names an event for.
+(rf-acofxs/set-global-on-failure-event [::change-message "ahhhhhh!"])
+
+(defn- repo-meta-request
+  [repo inject-key]
+  {:args [{:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}]
+   :inject-key inject-key})
 
 (rf/reg-event-fx ::do-work-with-async-stuff
-  [(rf-acofxs/inject-acofx ::async-now) ; Inject one single acofx without error-dispatch (global set error-dispatch will be used)
-   (rf-acofxs/inject-acofxs             ; Inject multiple acofxs and renames keys within coeffects map.
-    {::async-now*
-     ::async-now
+  [;; Inject one single acofx, the global on-failure event applies.
+   ;; Without args it waits for the delay set in the input.
+   (rf-acofxs/inject-acofx ::async-now)
 
-     ::async-now-5-secs-delayed
-     [::async-now 5000]                 ; Inject with one value arg
+   ;; Inject several acofxs, run concurrently.
+   (rf-acofxs/inject-acofxs
+    ;; With args and a key of its own in the coeffects.
+    [::async-now {:args [5000], :inject-key ::async-now-5-secs-delayed}]
 
-     ::async-now-x-secs-delayed
-     [::async-now #(get-in % [:db ::delay] 0)] ; Inject with one fn arg
+    ;; With its own on-failure event, instead of the global one.
+    [::github-repo-meta {:on-failure [::change-message "github failed"]}]
 
-     ::github-repo-meta
-     ::github-repo-meta
+    ;; The same acofx twice, under different keys.
+    [::http-request
+     (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)]
+    [::http-request
+     (repo-meta-request "core.async-helpers" ::core.async-helpers-meta)])
 
-     ::re-frame-tasks-meta
-     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/re-frame-tasks"}]
+   ;; An ordinary cofx, as usual.
+   (rf/inject-cofx ::now)]
 
-     ::core.async-helpers-meta
-     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/core.async-helpers"}]}
-
-    {:error-dispatch [::change-message "ahhhhhh!"]} ; Overrides global set error-dispatch for these acofxs
-    ,,,)
-   (rf/inject-cofx ::now)               ; Inject normal cofx
-   ]
   (fn [{:keys [db] :as cofxs} _]
     (let [async-computed-results
           (-> cofxs
-              (update ::github-repo-meta (comp :description))
-              (update ::re-frame-tasks-meta (comp :description))
-              (update ::core.async-helpers-meta (comp :description))
+              (update ::github-repo-meta :description)
+              (update ::re-frame-tasks-meta :description)
+              (update ::core.async-helpers-meta :description)
               (dissoc :db :event :original-event))]
 
       {:db
@@ -96,7 +101,7 @@
 
 (rf/reg-event-db ::change-delay
   (fn [db [_ delay]]
-    (assoc db ::delay delay)))
+    (assoc db ::delay (js/parseInt delay))))
 
 (rf/reg-sub ::delay
   (fn [db]

@@ -1,96 +1,104 @@
+[![CI](https://github.com/jtkDvlp/re-frame-async-coeffects/actions/workflows/ci.yml/badge.svg)](https://github.com/jtkDvlp/re-frame-async-coeffects/actions/workflows/ci.yml)
 [![Clojars Project](https://img.shields.io/clojars/v/net.clojars.jtkdvlp/re-frame-async-coeffects.svg)](https://clojars.org/net.clojars.jtkdvlp/re-frame-async-coeffects)
 [![cljdoc badge](https://cljdoc.org/badge/net.clojars.jtkdvlp/re-frame-async-coeffects)](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT)
+[![License](https://img.shields.io/badge/License-EPL%202.0-red.svg)](https://opensource.org/licenses/EPL-2.0)
+[![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif)](https://www.paypal.com/donate?hosted_button_id=2PDXQMHX56T6U)
 
 # re-frame-async-coeffects
 
-re-frame interceptors to register and inject async actions as coeffects for events.
+[re-frame](https://github.com/day8/re-frame) interceptors to register async
+actions -- a backend request, an IPC call, an async browser API -- and
+inject their results into an event as coeffects. The event handler runs
+once, with all of them at hand, instead of being split into a chain of
+load, success and further events.
+
+See the [API docs](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT)
+for the full reference.
+
+## The problem it solves
+
+An event that needs data from the outside world usually starts an effect
+and hands the rest of its work to the effect's success event. Two
+resources make three events, and the second request only starts once the
+first one is done:
+
+```clojure
+(reg-event-fx ::init-my-view
+  (fn [_ _]
+    {:http-xhrio {:uri "/some-data", ,,, :on-success [::got-some-data]}}))
+
+(reg-event-fx ::got-some-data
+  (fn [{:keys [db]} [_ some-data]]
+    {:db (assoc db ::some-data some-data)
+     :http-xhrio {:uri "/other-data", ,,, :on-success [::got-other-data]}}))
+
+(reg-event-db ::got-other-data
+  (fn [db [_ other-data]]
+    (assoc db ::other-data other-data)))
+```
+
+Yet the data is not something the event *does*, it is something the event
+*needs* -- input, like the current time or a cookie. re-frame has a name
+for input: coeffects. Registered as an async coeffect (acofx), the same
+case is one event, and both requests run concurrently:
+
+```clojure
+(reg-acofx-by-fx ::http
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args {:method :get, ,,,}})
+
+(reg-event-fx ::init-my-view
+  [(inject-acofxs
+    [::http {:args [{:uri "/some-data"}], :inject-key :some-data}]
+    [::http {:args [{:uri "/other-data"}], :inject-key :other-data}])]
+  (fn [{:keys [db some-data other-data]} _]
+    {:db (assoc db ::some-data some-data, ::other-data other-data)}))
+```
 
 ## Features
 
-* register async coeffects
-* inject one or more async coeffects to events
-  * multiple async coeffects will be synced for event calls (concurrent processing)
-  * supports error handling via error dispatch vector (can also be set globally)
-* convert effects like [http-fx](https://github.com/day8/re-frame-http-fx) to async coeffect
+Full reference per namespace:
+[`jtk-dvlp.re-frame.async-coeffects`](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT/api/jtk-dvlp.re-frame.async-coeffects) ·
+[`…async-coeffects.tasks`](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT/api/jtk-dvlp.re-frame.async-coeffects.tasks)
 
-## Motivation
+  * **Async coeffects.** `reg-acofx` registers a handler that gets the
+    event's coeffects and its injection and returns a channel with the
+    value to inject;
+    `inject-acofx` and `inject-acofxs` put the values into the event's
+    coeffects before its handler runs.
 
-Often you have to request backend data via http or some other http like bridge (electron remote e.g.). Such backend requests are async. Some browser / electron apis are also async e.g. clipboard. Such async api / backend request can be done via effect like following:
+  * **Concurrent loading.** Several acofxs of one injection run at the
+    same time; the event handler runs once all of them are done.
 
-```clojure
-;; maybe you have some view to init load data and/or do other preparing stuff
-(reg-event-fx ::init-my-view
-  (fn [_ _]
-    ;; use effect to load the data. So the view wont be init with ::init-my-view, but it will start initializing.
-    {:http-xhrio
-      {:uri "load some data"
-       ...
-       ;; the event that will do futher initialization
-       :on-success [::set-my-view-data]}})
+  * **Effects as coeffects.** `reg-acofx-by-fx` turns an effect that
+    reports through events -- such as
+    [http-fx](https://github.com/day8/re-frame-http-fx)'s `:http-xhrio` --
+    into an acofx. Its configuration can be computed from the coeffects and
+    the event, per registration and per injection.
 
-(reg-event-fx ::set-my-view-data
-  (fn [{:keys [db]} [_ backend-data]]
-     ;; got the data, put in app db to use...
-    {:db (assoc db ::data backend-data)
-     ;; ...and mybe load further data.
-     ;; WATCHOUT: you can only do one http request at a time with http-xhrio as with many effects. So you have to do it afterwards.
-     :http-xhrio
-      {:uri "load some other data"
-       ...
-       ;; hopefully the finalizing event after data loaded.
-       :on-success [::set-my-view-other-data]}})
+  * **Error handling.** A failing acofx keeps the event handler from
+    running and dispatches an on-failure event instead -- named by the
+    acofx, per injection or globally.
 
-(reg-event-db ::set-my-view-other-data
-  (fn [db [_ backend-data]]
-    ;; got the other data, put it in app db to use and do finalizing stuff to show the view correctly.
-    (assoc db ::other-data backend-data)
-    ...))
-```
-
-So three event registrations for loading two resources and initializing a view, actualy a more or less simple task, but in my opinion a lot to write and more important to read. So imagine a more complex app with many such cases could be confusing. But one more, the two resources were load sequentially not concurrently.
-
-To get a solution for it, do one step back: From the view of an event resources are changing world values. So this is the reason why using effectts to handle it. But why via effect? Actualy effects often handle changing the world not as in the example above reading from it. Therefore we have coeffects, for reading form the changing world. So effects and coeffects represent the changing world for a re-frame app. What´s the different between effect and coeffect? Actualy the point of view from an event. Coeffect is the input and effect is the output of an event.
-
-What do I want for my events? I want to do some stuff with backend resource to prepare my view. So actualy these resources are input data to my event like current timestamp or cookies etc. So it would be nice to get the resources as coeffects with my event.
-
-Said and done:
-
-```clojure
-;; register the http-xhrio effect as coeffect
-(reg-acofx-by-fx ::backend-resource  ; the new async coeffect (acofx) name
-  :http-xhrio ; the original effect
-  :on-success ; the trigger event for success
-  :on-failure ; the trigger event for failure
-  ;; and some initial config for the effect
-  {:method :get
-   :response-format (ajax/json-response-format {:keywords? true})})
-
-;; event to initialize the view using the new coeffect.
-(reg-event-fx ::init-my-view
-  [(inject-acofx
-    {:acofxs
-     ;; use the backend-resource acofx twice with a certain uri and key within coeffects-map for the event
-     {:some-data [::backend-resource {:uri "load some data"}],
-      :some-other-data [::backend-resource {:uri "load some other data"}]}})]
-  ;; WATCHOUT: the resources are loaded concurrently!!
-  (fn [{:keys [db some-data some-other-data]} _]
-    ;; Got all the backend data, put it into app db to use and to all initializing stuff.
-    {:db (assoc db ::data some-data,
-                ::other-data some-other-data)}
-    ...))
-```
-
-So few benifits in my opinion:
-- less code and more transparent structure
-- more re-frame idiomatic handling of changing world values
-- concurrent resources processing
+  * **re-frame-tasks integration.** With
+    [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks), a task
+    keeps running while the acofxs of its event run, and `wait-for` holds
+    other events back until the handler ran.
 
 ## Getting started
 
-### Get it / add dependency
+### Add the dependency
 
-Add the following dependency to your `project.clj`:<br>
 [![Clojars Project](https://img.shields.io/clojars/v/net.clojars.jtkdvlp/re-frame-async-coeffects.svg)](https://clojars.org/net.clojars.jtkdvlp/re-frame-async-coeffects)
+
+The library brings no dependencies of its own; your project provides
+re-frame, core.async and
+[core.async-helpers](https://github.com/jtkDvlp/core.async-helpers), whose
+error propagation the acofx handlers rely on. The re-frame-tasks
+integration additionally needs re-frame-tasks 3.x, and only if you require
+`jtk-dvlp.re-frame.async-coeffects.tasks`.
 
 ### Usage
 
@@ -104,10 +112,10 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [coeffects delay-in-ms]
+  (fn [{:keys [db]} {[delay-in-ms] :args}]
     (go
       (let [delay-in-ms
-            (or delay-in-ms 1000)
+            (or delay-in-ms (::delay db) 1000)
 
             start
             (js/Date.)]
@@ -118,56 +126,61 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
         (<! (timeout delay-in-ms))
         (println "acofx async-now finished" delay-in-ms)
-        (assoc coeffects ::async-now (- (.getTime (js/Date.))(.getTime start)),)))))
+        (- (.getTime (js/Date.)) (.getTime start))))))
 
 (rf-acofxs/reg-acofx-by-fx ::github-repo-meta
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args
+   {:method :get
+    :uri "https://api.github.com/repos/jtkDvlp/re-frame-async-coeffects"
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
 (rf-acofxs/reg-acofx-by-fx ::http-request
-  :http-xhrio
-  :on-success
-  :on-failure
-  {:method :get
-   :response-format (ajax/json-response-format {:keywords? true})})
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args
+   {:method :get
+    :response-format (ajax/json-response-format {:keywords? true})}})
 
-(rf-acofxs/set-global-error-dispatch! [::change-message "ahhhhhh!"])
+;; Dispatched on any failure no injection or handler names an event for.
+(rf-acofxs/set-global-on-failure-event [::change-message "ahhhhhh!"])
+
+(defn- repo-meta-request
+  [repo inject-key]
+  {:args [{:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}]
+   :inject-key inject-key})
 
 (rf/reg-event-fx ::do-work-with-async-stuff
-  [(rf-acofxs/inject-acofx ::async-now) ; Inject one single acofx without error-dispatch (global set error-dispatch will be used)
-   (rf-acofxs/inject-acofxs             ; Inject multiple acofxs and renames keys within coeffects map.
-    {::async-now*
-     ::async-now
+  [;; Inject one single acofx, the global on-failure event applies.
+   ;; Without args it waits for the delay set in the input.
+   (rf-acofxs/inject-acofx ::async-now)
 
-     ::async-now-5-secs-delayed
-     [::async-now 5000]                 ; Inject with one value arg
+   ;; Inject several acofxs, run concurrently.
+   (rf-acofxs/inject-acofxs
+    ;; With args and a key of its own in the coeffects.
+    [::async-now {:args [5000], :inject-key ::async-now-5-secs-delayed}]
 
-     ::async-now-x-secs-delayed
-     [::async-now #(get-in % [:db ::delay] 0)] ; Inject with one fn arg
+    ;; With its own on-failure event, instead of the global one.
+    [::github-repo-meta {:on-failure [::change-message "github failed"]}]
 
-     ::github-repo-meta
-     ::github-repo-meta
+    ;; The same acofx twice, under different keys.
+    [::http-request
+     (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)]
+    [::http-request
+     (repo-meta-request "core.async-helpers" ::core.async-helpers-meta)])
 
-     ::re-frame-tasks-meta
-     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/re-frame-tasks"}]
+   ;; An ordinary cofx, as usual.
+   (rf/inject-cofx ::now)]
 
-     ::core.async-helpers-meta
-     [::http-request {:uri "https://api.github.com/repos/jtkDvlp/core.async-helpers"}]}
-
-    {:error-dispatch [::change-message "ahhhhhh!"]} ; Overrides global set error-dispatch for these acofxs
-    ,,,)
-   (rf/inject-cofx ::now)               ; Inject normal cofx
-   ]
   (fn [{:keys [db] :as cofxs} _]
     (let [async-computed-results
           (-> cofxs
-              (update ::github-repo-meta (comp :description))
-              (update ::re-frame-tasks-meta (comp :description))
-              (update ::core.async-helpers-meta (comp :description))
+              (update ::github-repo-meta :description)
+              (update ::re-frame-tasks-meta :description)
+              (update ::core.async-helpers-meta :description)
               (dissoc :db :event :original-event))]
 
       {:db
@@ -175,6 +188,183 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
            (assoc ::async-computed-results async-computed-results)
            (assoc ::message nil))})))
 ```
+
+### Keeping a task running (re-frame-tasks)
+
+With [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks), use the
+injections from `jtk-dvlp.re-frame.async-coeffects.tasks` after `as-task`.
+The task then keeps running while the acofxs run, `wait-for` holds other
+events back until the handler ran, and a failure ends the task. Without a
+task they behave like the plain ones.
+
+```clojure
+(ns your-project
+  (:require
+   [re-frame.core :as rf]
+   [jtk-dvlp.re-frame.tasks :as tasks]
+   [jtk-dvlp.re-frame.async-coeffects.tasks :as acofx-tasks]))
+
+(rf/reg-event-fx ::init-my-view
+  [(tasks/as-task :loading)
+   (acofx-tasks/inject-acofx ::backend-resource [{:uri "load some data"}])]
+  (fn [{:keys [db] ::keys [backend-resource]} _]
+    {:db (assoc db ::data backend-resource)}))
+```
+
+Only this namespace needs re-frame-tasks (3.x) as dependency.
+
+### Migrating from 2.x
+
+**acofx handlers return the value, not the coeffects.** The handler still
+gets the coeffects first, but the channel carries the value to inject.
+Its second argument is the injection -- the options map with `:args`,
+`:inject-key` and `:on-failure` -- instead of the arguments spread out.
+
+```clojure
+;; 2.x
+(fn [coeffects delay-ms]
+  (go (<! (timeout delay-ms)) (assoc coeffects ::now (js/Date.))))
+;; 3.x
+(fn [coeffects {[delay-ms] :args}]
+  (go (<! (timeout delay-ms)) (js/Date.)))
+```
+
+**`reg-acofx-by-fx` takes a map.**
+
+```clojure
+;; 2.x
+(reg-acofx-by-fx ::http :http-xhrio :on-success :on-failure {:method :get})
+;; 3.x
+(reg-acofx-by-fx ::http
+  {:fx-id :http-xhrio
+   :on-success-key :on-success
+   :on-failure-key :on-failure
+   :initial-args {:method :get}})
+```
+
+`:initial-args` may also be a function of the coeffects and the event. The
+new `:on-failure-event` names the event to dispatch when the effect fails.
+
+**Injection takes `[id opts]` per acofx.** Args, the key in the coeffects
+and the failure event are options of each acofx, not of the whole
+injection. The map form of `inject-acofxs` is gone; `:inject-key` replaces
+its keys.
+
+```clojure
+;; 2.x
+(inject-acofxs {:a [::http {:uri "/a"}]
+                :b [::http {:uri "/b"}]}
+               {:error-dispatch [::failed]})
+;; 3.x
+(inject-acofxs
+ [::http {:args [{:uri "/a"}], :inject-key :a, :on-failure [::failed]}]
+ [::http {:args [{:uri "/b"}], :inject-key :b, :on-failure [::failed]}])
+
+;; 2.x
+(inject-acofx [::async-now 5000])
+;; 3.x
+(inject-acofx ::async-now [5000])
+```
+
+**Only `reg-acofx-by-fx` computes arguments.** In 2.x any injection
+argument that was a function got called with the coeffects and the event.
+Now a handler gets its arguments as given; it has the coeffects anyway.
+`reg-acofx-by-fx` computes them: its `:initial-args` may be a function of
+the coeffects and the event, and the injection argument may be a function
+that also gets the resolved `:initial-args` and returns the configuration
+to use -- so it can derive from the registration, down to removing keys:
+
+```clojure
+(inject-acofx ::http [(fn [_coeffects _event initial-args]
+                        (update initial-args :uri str "/details"))])
+```
+
+**`set-global-error-dispatch!` is now `set-global-on-failure-event`.** On
+failure the event dispatched is the one the acofx handler put under
+`::on-failure` into its exception, else the injection's `:on-failure`,
+else the global one. The handler gets the injection, so it decides
+whether the injection's event wins; `reg-acofx-by-fx` lets it win over
+its `:on-failure-event`.
+
+**The exception appended to the failure event is wrapped.** It is an
+`ex-info` with `:code ::acofx-error` and the failed acofx under `::acofx`;
+the handler's own exception is its cause. For `reg-acofx-by-fx`, what the
+effect reported is under `:error` in the `ex-data` of that cause.
+
+**The event is dispatched again as it was dispatched** (`:original-event`),
+so interceptors like `trim-v` see it unchanged on every run.
+
+**re-frame-tasks 3.x** is supported through
+`jtk-dvlp.re-frame.async-coeffects.tasks`, see above. re-frame-tasks 2.x
+keeps working with the plain injections.
+
+## Development
+
+The tests run under node:
+
+```bash
+lein with-profile +test,-dev run -m cljs.main --target node \
+  --output-dir target/test --output-to target/test/main.js \
+  --compile-opts '{:main jtk-dvlp.re-frame.test-runner}' \
+  --compile jtk-dvlp.re-frame.test-runner
+node target/test/main.js
+```
+
+They run on every push and pull request, see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+The demo app in [`dev/`](dev/jtk_dvlp/your_project.cljs) starts with
+`lein repl` (figwheel-main, port 9801).
+
+What has changed, and what is on the default branch but not released yet,
+is in the release pull request and, from the first release on, in
+`CHANGELOG.md`.
+
+## Contributing
+
+### Commit messages
+
+Commit subjects follow [Conventional
+Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+
+```
+<type>[(<scope>)][!]: <description>
+```
+
+The `!` marks a breaking change and belongs to the type, not to
+`feat` -- `fix!:` is just as valid and means a bug fix that breaks.
+
+Pull requests are merged, not squashed, so every commit of a branch ends
+up on `master` -- the convention applies to each of them. A CI job checks
+this on every pull request. The pull request title itself is *not* a
+conventional commit: it ends up in the merge commit, and release-please
+would list it a second time.
+
+The type decides the next version:
+
+| Subject | Release |
+|---|---|
+| `fix: …` | patch -- `3.0.0` → `3.0.1` |
+| `feat: …` | minor -- `3.0.0` → `3.1.0` |
+| any type with a `!`, or a `BREAKING CHANGE:` footer | major -- `3.0.0` → `4.0.0` |
+| `perf:`, `revert:`, `refactor:`, `docs:` | patch -- they reach the user; docstrings and this README are part of the artifact |
+| `build:`, `chore:`, `ci:`, `style:`, `test:` | none, and no changelog entry |
+
+### Releasing
+
+Releasing is automatic; nobody edits a version number by hand.
+
+1. A merge to `master` lets
+   [release-please](https://github.com/googleapis/release-please) open or
+   update a release pull request. It carries the next version in
+   `project.clj` and the changelog entries derived from the commits since
+   the last release.
+2. Merging that pull request creates the git tag and the GitHub release.
+3. The same workflow run then tests the tagged state and pushes the
+   artifact to Clojars.
+
+So the release pull request is the point where a release is decided --
+until it is merged, nothing leaves the house.
 
 ## Appendix
 
