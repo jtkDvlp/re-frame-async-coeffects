@@ -49,7 +49,7 @@ Nebenprodukt anderer Arbeit.
 ## Abhängigkeiten
 
 Alle Laufzeit-Abhängigkeiten (`re-frame`, `reagent`, `core.async`,
-`jtk-dvlp/core.async-helpers`) stehen bewusst im Profil `:provided`: Die
+`jtk-dvlp/core.async-helpers`, `jtk-dvlp/re-frame-tasks`) stehen bewusst im Profil `:provided`: Die
 Anwendung wählt die Versionen, die Bibliothek bringt keine eigenen mit.
 Neue Laufzeit-Abhängigkeiten gehören ebenfalls dorthin.
 
@@ -59,14 +59,6 @@ nichts lesen: `put!`, `close!`, `merge`, `timeout`. Ein einfaches
 `core.async/<!` nimmt einen Fehler stumm als Wert entgegen, und die
 `on-failure`-Behandlung bekommt ihn nie zu sehen (siehe die Richtlinie zu
 core.async-helpers).
-
-**WATCHOUT: re-frame-tasks 3 ist noch nicht veröffentlicht.** Die Anbindung
-ist gegen dessen Zweig `refactor` auf Commit `096bbd8` geschrieben. Bis
-zum Release holen die Tests die Quellen aus einem Checkout unter
-`target/deps/re-frame-tasks/` (die CI checkt ihn aus, `project.clj` legt
-ihn auf den `:test`-Quellpfad), und ein Release dieser Bibliothek muss
-darauf warten. Danach wird der Checkout durch die Abhängigkeit ersetzt,
-unter `:provided`.
 
 ## Zweige und Versionen
 
@@ -102,12 +94,9 @@ editieren.
 
 ## Tests
 
-Laufen unter node, wie in `.github/workflows/test.yml`. Lokal müssen zuerst
-die re-frame-tasks-Quellen da sein:
+Laufen unter node, wie in `.github/workflows/test.yml`:
 
 ```
-git clone https://github.com/jtkDvlp/re-frame-tasks target/deps/re-frame-tasks
-git -C target/deps/re-frame-tasks checkout 096bbd8
 lein with-profile +test,-dev run -m cljs.main --target node \
   --output-dir target/test --output-to target/test/main.js \
   --compile-opts '{:main jtk-dvlp.re-frame.test-runner}' \

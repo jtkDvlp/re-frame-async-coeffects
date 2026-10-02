@@ -296,8 +296,6 @@ keeps working with the plain injections.
 The tests run under node:
 
 ```bash
-git clone https://github.com/jtkDvlp/re-frame-tasks target/deps/re-frame-tasks
-git -C target/deps/re-frame-tasks checkout 096bbd8
 lein with-profile +test,-dev run -m cljs.main --target node \
   --output-dir target/test --output-to target/test/main.js \
   --compile-opts '{:main jtk-dvlp.re-frame.test-runner}' \
@@ -305,8 +303,7 @@ lein with-profile +test,-dev run -m cljs.main --target node \
 node target/test/main.js
 ```
 
-The first two lines fetch the sources of re-frame-tasks 3, which is not
-released yet. They run on every push and pull request, see
+They run on every push and pull request, see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 The demo app in [`dev/`](dev/jtk_dvlp/your_project.cljs) starts with

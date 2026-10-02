@@ -3,7 +3,7 @@
   (:require
    [cljs.test :refer-macros [run-tests]]
 
-   [taoensso.timbre :as log]
+   [re-frame.core :as rf]
 
    [jtk-dvlp.re-frame.async-coeffects-test]
    [jtk-dvlp.re-frame.async-coeffects.tasks-test]))
@@ -18,8 +18,8 @@
 
 (defn -main
   [& _]
-  ;; NOTE: re-frame-tasks traces every step through timbre.
-  (log/set-min-level! :warn)
+  ;; NOTE: re-frame-tasks traces every step at level `:debug`.
+  (rf/set-loggers! {:debug (fn [& _])})
   (run-tests
    'jtk-dvlp.re-frame.async-coeffects-test
    'jtk-dvlp.re-frame.async-coeffects.tasks-test))
