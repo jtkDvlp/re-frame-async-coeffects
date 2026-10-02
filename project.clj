@@ -46,13 +46,14 @@
 
   :profiles
   {:provided
+   ;; WATCHOUT: `reagent` belongs here although this library never calls
+   ;; it. re-frame declares it `provided` itself, so it does not arrive
+   ;; transitively -- without it `re-frame.core` does not even compile.
    {:dependencies
     [[org.clojure/clojure "1.12.5"]
 
      [re-frame "1.4.3" :exclusions [reagent]]
      [reagent "1.3.0"]
-     [cljsjs/react "18.3.1-1"]
-     [cljsjs/react-dom "18.3.1-1"]
 
      [org.clojure/core.async "1.9.865"]
      [jtk-dvlp/core.async-helpers "3.6.1"]]}
@@ -60,7 +61,9 @@
    :dev
    {:dependencies
     [[com.bhauman/figwheel-main "0.2.20"]
-     [day8.re-frame/http-fx "0.2.4"]]
+     [day8.re-frame/http-fx "0.2.4"]
+     [cljsjs/react "18.3.1-1"]
+     [cljsjs/react-dom "18.3.1-1"]]
 
     :source-paths
     ["dev"]
@@ -69,7 +72,9 @@
     ["target"]}
 
    ;; NOTE: The library declares no ClojureScript dependency -- a consumer
-   ;; brings their own. The test run needs a compiler.
+   ;; brings their own. The test run needs a compiler, and React is a
+   ;; build-time need of that compile, not a contract with consumers --
+   ;; they bring their own, through cljsjs or npm.
    ;;
    ;; WATCHOUT: `re-frame-tasks` 3 is not released yet. Until it is, its
    ;; sources come from a checkout under `target/deps/` (see the CI
@@ -79,7 +84,9 @@
    :test
    {:dependencies
     [[org.clojure/clojurescript "1.11.132"]
-     [com.taoensso/timbre "6.8.0"]]
+     [com.taoensso/timbre "6.8.0"]
+     [cljsjs/react "18.3.1-1"]
+     [cljsjs/react-dom "18.3.1-1"]]
 
     :source-paths
     ["test" "target/deps/re-frame-tasks/src"]}
