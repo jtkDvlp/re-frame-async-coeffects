@@ -19,7 +19,7 @@
     (assoc coeffects ::now (js/Date.))))
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [{:keys [db]} & [delay-in-ms]]
+  (fn [{:keys [db]} {[delay-in-ms] :args}]
     (go
       (let [delay-in-ms
             (or delay-in-ms (::delay db) 1000)

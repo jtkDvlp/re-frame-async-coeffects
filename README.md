@@ -64,7 +64,8 @@ Full reference per namespace:
 [`…async-coeffects.tasks`](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT/api/jtk-dvlp.re-frame.async-coeffects.tasks)
 
   * **Async coeffects.** `reg-acofx` registers a handler that gets the
-    event's coeffects and returns a channel with the value to inject;
+    event's coeffects and its injection and returns a channel with the
+    value to inject;
     `inject-acofx` and `inject-acofxs` put the values into the event's
     coeffects before its handler runs.
 
@@ -78,8 +79,8 @@ Full reference per namespace:
     the event, per registration and per injection.
 
   * **Error handling.** A failing acofx keeps the event handler from
-    running and dispatches an on-failure event instead -- named per
-    injection, per acofx or globally.
+    running and dispatches an on-failure event instead -- named by the
+    acofx, per injection or globally.
 
   * **re-frame-tasks integration.** With
     [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks), a task
@@ -111,7 +112,7 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [{:keys [db]} & [delay-in-ms]]
+  (fn [{:keys [db]} {[delay-in-ms] :args}]
     (go
       (let [delay-in-ms
             (or delay-in-ms (::delay db) 1000)
@@ -216,12 +217,16 @@ Only this namespace needs re-frame-tasks (3.x) as dependency.
 
 **acofx handlers return the value, not the coeffects.** The handler still
 gets the coeffects first, but the channel carries the value to inject.
+Its second argument is the injection -- the options map with `:args`,
+`:inject-key` and `:on-failure` -- instead of the arguments spread out.
 
 ```clojure
 ;; 2.x
-(fn [coeffects] (go (assoc coeffects ::now (js/Date.))))
+(fn [coeffects delay-ms]
+  (go (<! (timeout delay-ms)) (assoc coeffects ::now (js/Date.))))
 ;; 3.x
-(fn [coeffects] (go (js/Date.)))
+(fn [coeffects {[delay-ms] :args}]
+  (go (<! (timeout delay-ms)) (js/Date.)))
 ```
 
 **`reg-acofx-by-fx` takes a map.**
@@ -275,9 +280,11 @@ to use -- so it can derive from the registration, down to removing keys:
 ```
 
 **`set-global-error-dispatch!` is now `set-global-on-failure-event`.** On
-failure the event dispatched is the injection's `:on-failure`, else the
-one the acofx handler put under `::on-failure` into its exception (for
-`reg-acofx-by-fx`: `:on-failure-event`), else the global one.
+failure the event dispatched is the one the acofx handler put under
+`::on-failure` into its exception, else the injection's `:on-failure`,
+else the global one. The handler gets the injection, so it decides
+whether the injection's event wins; `reg-acofx-by-fx` lets it win over
+its `:on-failure-event`.
 
 **The exception appended to the failure event is wrapped.** It is an
 `ex-info` with `:code ::acofx-error` and the failed acofx under `::acofx`;

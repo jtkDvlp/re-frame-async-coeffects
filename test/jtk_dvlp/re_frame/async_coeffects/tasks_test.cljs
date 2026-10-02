@@ -46,7 +46,7 @@
 (defn- reg-gated-acofx!
   [fail?]
   (acofxs/reg-acofx ::gated
-    (fn [_coeffects]
+    (fn [_coeffects _injection]
       (let [?release @!release-acofx]
         (async/go
           (async/<! ?release)

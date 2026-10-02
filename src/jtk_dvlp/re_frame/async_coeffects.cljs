@@ -31,14 +31,23 @@
   "Registers `handler` as async coeffect (acofx) under `id`, for use with
    `inject-acofx` and `inject-acofxs`.
 
-   `handler` is called with the event's `coeffects`, followed by the
-   `:args` given at injection. It returns a promise channel carrying the
-   value to inject. A failure travels as an exception over that channel,
-   see `jtk-dvlp.async`.
+   `handler` is called with the event's `coeffects` and the injection:
+   the options map given to `inject-acofxs`, with `:id` and
+   `:inject-key` filled in. Its `:args` are the handler's to interpret.
+   It returns a promise channel carrying the value to inject. A failure
+   travels as an exception over that channel, see `jtk-dvlp.async`.
 
    To name the event to dispatch on failure, put it under `::on-failure`
-   into the `ex-data` of that exception. An `:on-failure` given at
-   injection takes precedence."
+   into the `ex-data` of that exception. Without one, the injection's
+   `:on-failure` applies, then the global one -- so a handler that wants
+   to defer to the injection leaves it out, and one that wants to
+   override takes the injection's into account itself.
+
+       (reg-acofx ::now
+         (fn [_coeffects {[delay-ms] :args}]
+           (go
+             (<! (timeout delay-ms))
+             (js/Date.))))"
   [id handler]
   (rf-registrar/register-handler kind id handler))
 
@@ -62,7 +71,7 @@
 (def ^{:private true, :rf/reg-event ::reject-fx-acofx} reject-fx-acofx-event
   "re-frame event hooked into an effect's failure key by
    `reg-acofx-by-fx`. Turns what the effect reports into an exception,
-   carrying the `on-failure` event given at registration."
+   carrying the event to dispatch on failure."
   (rf/reg-event-fx ::reject-fx-acofx
     (fn [_ [_ result-chan on-failure data]]
       (let [exception
@@ -93,7 +102,7 @@
 (defn- fx-acofx-handler
   [{:keys [fx-id initial-args on-success-key on-failure-key
            on-failure-event]}]
-  (fn [coeffects & [inject-args]]
+  (fn [coeffects {[inject-args] :args, :keys [on-failure]}]
     (let [acofx
           (promise-chan)
 
@@ -101,7 +110,7 @@
           (cond-> {on-success-key [::resolve-fx-acofx acofx]}
             on-failure-key
             (assoc on-failure-key
-              [::reject-fx-acofx acofx on-failure-event]))
+              [::reject-fx-acofx acofx (or on-failure on-failure-event)]))
 
           fx-args
           (-> coeffects
@@ -124,8 +133,8 @@
    - `on-success-key` is the effect's key for the success event.
    - `on-failure-key` is the effect's key for the failure event
      (optional; without it a failure is never noticed).
-   - `on-failure-event` is the event to dispatch on failure (optional),
-     see `inject-acofxs` for the precedence.
+   - `on-failure-event` is the event to dispatch on failure (optional).
+     An `:on-failure` given at injection replaces it.
 
    The first `:args` value given at injection configures the effect for
    that injection:
@@ -151,7 +160,7 @@
 
 (defn set-global-on-failure-event
   "Sets the event to dispatch when an acofx fails and neither the
-   injection nor the handler names one, see `inject-acofxs`. `nil`
+   handler nor the injection names one, see `inject-acofxs`. `nil`
    removes it again."
   [on-failure]
   (reset! !global-on-failure-event on-failure))
@@ -167,14 +176,14 @@
     :inject-key (:inject-key acofx id)))
 
 (defn- <run-acofx!
-  [coeffects {:keys [id args] :as acofx}]
+  [coeffects {:keys [id] :as acofx}]
   (async/go
     (try
       (let [<handler
             (rf-registrar/get-handler kind id true)
 
             result
-            (async/<! (apply <handler coeffects args))]
+            (async/<! (<handler coeffects acofx))]
 
         (assoc acofx :inject-value result))
 
@@ -199,8 +208,8 @@
          (into {}))))
 
 (defn- on-failure-event
-  "The event to dispatch for the acofx failure `ex`: the one given at
-   injection, else the one the handler put into its exception, else the
+  "The event to dispatch for the acofx failure `ex`: the one the handler
+   put into its exception, else the one given at injection, else the
    global one."
   [ex]
   (let [{:keys [on-failure]}
@@ -213,7 +222,7 @@
     ;; when the acofx is normalized. Injection happens when the event is
     ;; registered, usually at namespace load -- before an app gets to
     ;; call `set-global-on-failure-event`.
-    (or on-failure handler-on-failure @!global-on-failure-event)))
+    (or handler-on-failure on-failure @!global-on-failure-event)))
 
 (defn- dispatch-failure!
   [ex]
@@ -366,19 +375,19 @@
    Each of `acofxs` is a vector `[id opts]` of an acofx registered with
    `reg-acofx` and an optional map of
 
-   - `:args` -- vector of arguments to the acofx handler, after the
-     coeffects, passed as given. What a function among them means is up
-     to the handler; `reg-acofx-by-fx` computes one from the coeffects,
-     see there.
+   - `:args` -- vector of arguments for the acofx handler, which gets
+     the whole map. What they mean, a function among them included, is
+     up to the handler; `reg-acofx-by-fx` computes one from the
+     coeffects, see there.
    - `:inject-key` -- the key in the coeffects, defaults to `id`. Needed
      to inject the same acofx more than once.
    - `:on-failure` -- event to dispatch on failure, the exception
      appended.
 
    On failure the event handler does not run. The event dispatched is the
-   injection's `:on-failure`, else the one the acofx handler named (see
-   `reg-acofx`), else the global one (see `set-global-on-failure-event`).
-   Without any, the failure is logged.
+   one the acofx handler named (see `reg-acofx`), else the injection's
+   `:on-failure`, else the global one (see
+   `set-global-on-failure-event`). Without any, the failure is logged.
 
    The event runs twice -- once to start the acofxs, once with their
    values (once more per further `inject-acofxs` on the same event).

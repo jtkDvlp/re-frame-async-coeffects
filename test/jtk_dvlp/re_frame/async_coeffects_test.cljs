@@ -26,19 +26,19 @@
 (defn- reg-test-acofxs!
   []
   (acofxs/reg-acofx ::value
-    (fn [_coeffects value]
+    (fn [_coeffects {[value] :args}]
       (swap! !acofx-calls inc)
       (async/go
         (async/<! (core-async/timeout 1))
         value)))
 
   (acofxs/reg-acofx ::call-count
-    (fn [_coeffects]
+    (fn [_coeffects _injection]
       (let [calls (swap! !acofx-calls inc)]
         (async/go calls))))
 
   (acofxs/reg-acofx ::failing
-    (fn [_coeffects & [handler-on-failure]]
+    (fn [_coeffects {[handler-on-failure] :args}]
       (async/go
         (throw
          (ex-info "acofx under test failed"
@@ -65,6 +65,25 @@
         (is (async/<! (<eventually #(seq @!handled))))
         (is (= [42] @!handled))))))
 
+(deftest passes-the-injection-to-the-handler
+  (async done
+    (run-async done
+      (async/go
+        (acofxs/reg-acofx ::injection
+          (fn [_coeffects injection]
+            (async/go injection)))
+
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::injection {:args [:a], :inject-key :i})]
+          (fn [{:keys [i]} _]
+            (record-handled! (select-keys i [:id :args :inject-key]))
+            {}))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @!handled))))
+        (is (= [{:id ::injection, :args [:a], :inject-key :i}]
+               @!handled))))))
+
 (deftest injects-the-same-acofx-under-different-keys
   (async done
     (run-async done
@@ -90,7 +109,7 @@
       (async/go
         (let [!started (atom #{})]
           (acofxs/reg-acofx ::rendezvous
-            (fn [_coeffects key]
+            (fn [_coeffects {[key] :args}]
               (swap! !started conj key)
               (async/go
                 (when-not (async/<! (<eventually
@@ -316,7 +335,9 @@
     (async/<! (<eventually #(seq @!failures)))
     (async/<! (<settle))))
 
-(deftest dispatches-the-injections-on-failure
+(deftest dispatches-the-handlers-on-failure-first
+  ;; The handler gets the injection, so it decides whether the
+  ;; injection's `:on-failure` wins. What it names is final.
   (async done
     (run-async done
       (async/go
@@ -325,7 +346,7 @@
                    {:args [[::helpers/failed :handler]]
                     :on-failure [::helpers/failed :injection]}))
 
-        (is (= [:injection] (map first @!failures)))
+        (is (= [:handler] (map first @!failures)))
         (is (empty? @!handled) "handler ran despite the failure")
         (is (= ::boom (-> @!failures
                           (first)
@@ -334,15 +355,15 @@
                           (ex-data)
                           (:code))))))))
 
-(deftest dispatches-the-handlers-on-failure-without-injections
+(deftest dispatches-the-injections-on-failure-without-the-handlers
   (async done
     (run-async done
       (async/go
         (acofxs/set-global-on-failure-event [::helpers/failed :global])
         (async/<! (<dispatch-failing-event!
-                   {:args [[::helpers/failed :handler]]}))
+                   {:on-failure [::helpers/failed :injection]}))
 
-        (is (= [:handler] (map first @!failures)))
+        (is (= [:injection] (map first @!failures)))
         (is (empty? @!handled))))))
 
 (deftest dispatches-the-global-on-failure-last
@@ -423,6 +444,32 @@
         (let [[[tag ex]] @!failures]
           (is (= :registered tag))
           (is (= {:status 500} (-> ex (ex-cause) (ex-data) (:error)))))
+        (is (empty? @!handled))))))
+
+(deftest prefers-the-injections-on-failure-for-an-effect
+  ;; The registered event is the default for every injection; one that
+  ;; names its own is the more specific.
+  (async done
+    (run-async done
+      (async/go
+        (reg-fake-request-fx!)
+        (acofxs/reg-acofx-by-fx ::request
+          {:fx-id ::fake-request
+           :on-success-key :on-success
+           :on-failure-key :on-failure
+           :on-failure-event [::helpers/failed :registered]})
+
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::request
+                                {:args [{:error {:status 500}}]
+                                 :on-failure [::helpers/failed :injection]})]
+          (fn [_ _]
+            (record-handled! :handler-ran)
+            {}))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @!failures))))
+        (is (= [:injection] (map first @!failures)))
         (is (empty? @!handled))))))
 
 (deftest computes-the-initial-args-of-an-effect
