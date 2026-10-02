@@ -256,33 +256,28 @@
   (let [dispatch-id (get-in context [:acoeffects :dispatch-id])]
     (get @!results dispatch-id {})))
 
-(def ^:private event-handler-ids
-  #{:db-handler :fx-handler :ctx-handler})
-
-(defn- event-handler?
-  [interceptor]
-  (contains? event-handler-ids (:id interceptor)))
-
-(defn- forget-parked-results
+(defn- cleanup-results
   [dispatch-id]
   (rf/->interceptor
-   :id ::forget-parked-results
+   :id ::cleanup-results
    :before
    (fn [context]
      (swap! !results dissoc dispatch-id)
      context)))
 
 (defn- insert-before-event-handler
+  "Inserts `interceptor` before the last one in `queue`, the event handler.
+
+   NOTE: The handler is last by construction -- re-frame puts global
+   interceptors in front. And this runs from within the queue, so nothing
+   has emptied it yet."
   [queue interceptor]
-  (let [[before-handler from-handler]
-        (split-with (complement event-handler?) queue)]
+  (-> #queue []
+      (into (butlast queue))
+      (conj interceptor)
+      (conj (last queue))))
 
-    (-> #queue []
-        (into before-handler)
-        (conj interceptor)
-        (into from-handler))))
-
-(defn- ensure-forgetting
+(defn- ensure-results-cleanup
   "Makes the run remove the parked results right before its event
    handler, once per run.
 
@@ -292,13 +287,13 @@
    that throws never gets to an `:after`, so removing them there would
    leave them parked for good."
   [context]
-  (if (get-in context [:acoeffects :forgetting?])
+  (if (get-in context [:acoeffects :cleanup-scheduled?])
     context
     (let [dispatch-id (get-in context [:acoeffects :dispatch-id])]
       (-> context
           (update :queue insert-before-event-handler
-                  (forget-parked-results dispatch-id))
-          (assoc-in [:acoeffects :forgetting?] true)))))
+                  (cleanup-results dispatch-id))
+          (assoc-in [:acoeffects :cleanup-scheduled?] true)))))
 
 (defn- abort-event
   [context]
@@ -361,7 +356,7 @@
   [context results]
   (-> context
       (update :coeffects merge results)
-      (ensure-forgetting)))
+      (ensure-results-cleanup)))
 
 (defn inject-acofxs
   "Returns an interceptor that injects the async coeffects `acofxs` into
