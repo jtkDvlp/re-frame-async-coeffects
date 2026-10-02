@@ -72,13 +72,38 @@
        (has-task? context)
        (claim-or-release)))))
 
+(defn- compose-interceptors
+  "One interceptor out of `outer` and `inner`: `outer`'s `:before` runs
+   first, its `:after` last -- as if `outer` came first in the chain."
+  [id outer inner]
+  (rf/->interceptor
+   :id id
+
+   :before
+   (fn [context]
+     (-> context
+         ((or (:before outer) identity))
+         ((or (:before inner) identity))))
+
+   :after
+   (fn [context]
+     (-> context
+         ((or (:after inner) identity))
+         ((or (:after outer) identity))))))
+
 (defn inject-acofxs
   "Like `jtk-dvlp.re-frame.async-coeffects/inject-acofxs`, and keeps the
    task of the event running while the acofxs run. Place it after
    `jtk-dvlp.re-frame.tasks/as-task`; without a task it behaves just like
-   the plain one."
+   the plain one.
+
+   One interceptor, so it serves as global interceptor too -- then
+   `as-task` has to be a global one registered before it."
   [& acofxs]
-  [track-task (apply acofxs/inject-acofxs acofxs)])
+  (compose-interceptors
+   ::inject-acofxs
+   track-task
+   (apply acofxs/inject-acofxs acofxs)))
 
 (defn inject-acofx
   "Like `jtk-dvlp.re-frame.async-coeffects/inject-acofx`, see
@@ -92,4 +117,7 @@
    (inject-acofx id nil))
 
   ([id value]
-   [track-task (acofxs/inject-acofx id value)]))
+   (compose-interceptors
+    ::inject-acofx
+    track-task
+    (acofxs/inject-acofx id value))))
