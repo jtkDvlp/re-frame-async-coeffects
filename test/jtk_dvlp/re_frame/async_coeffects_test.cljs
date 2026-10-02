@@ -152,11 +152,11 @@
   []
   @@#'acofxs/!results)
 
-(deftest forgets-parked-results-once-the-handler-ran
+(deftest cleans-up-results-once-the-handler-ran
   ;; Parked results are keyed by dispatch, so a later dispatch never sees
   ;; them. Left behind, they only pile up. `reg-event-db` is the case that
-  ;; went missing once: its handler runs as `:db-handler`, not
-  ;; `:fx-handler`.
+  ;; went missing once: its handler interceptor has another id than the
+  ;; one of `reg-event-fx`.
   (async done
     (run-async done
       (async/go
@@ -179,7 +179,7 @@
         (async/<! (<settle))
         (is (empty? (parked-results)))))))
 
-(deftest forgets-parked-results-when-the-handler-throws
+(deftest cleans-up-results-when-the-handler-throws
   ;; A throwing handler never reaches an `:after`. Results removed only
   ;; there stayed parked for good.
   (async done
