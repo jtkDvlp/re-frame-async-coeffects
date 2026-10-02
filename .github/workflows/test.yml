@@ -21,16 +21,6 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      # WATCHOUT: re-frame-tasks 3 is not released yet, so its sources are
-      # checked out at a fixed commit and put on the `:test` source path
-      # (see project.clj). Replace by the Clojars dependency once it is
-      # released.
-      - uses: actions/checkout@v7
-        with:
-          repository: jtkDvlp/re-frame-tasks
-          ref: 096bbd8c311fe1292fbd07281bf1d6c27d0b27f2
-          path: target/deps/re-frame-tasks
-
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
