@@ -3,10 +3,11 @@
    underway.
 
    An event with acofxs is aborted and dispatched again once they are
-   done, see `jtk-dvlp.re-frame.async-coeffects`. Without this namespace
-   the task of the aborted run ends with it, and the run with the results
-   opens a second one. Here the task is claimed while the acofxs run and
-   the event picks it up again when it comes back.
+   done, see [[jtk-dvlp.re-frame.async-coeffects/inject-acofxs]].
+   Without this namespace the task of the aborted run ends with it, and
+   the run with the results opens a second one. Here the task is claimed
+   while the acofxs run and the event picks it up again when it comes
+   back.
 
    Its own namespace, so re-frame-tasks is only needed by who requires it."
   (:require
@@ -92,7 +93,7 @@
          ((or (:after outer) identity))))))
 
 (defn inject-acofxs
-  "Like `jtk-dvlp.re-frame.async-coeffects/inject-acofxs`, and keeps the
+  "Like [[jtk-dvlp.re-frame.async-coeffects/inject-acofxs]], and keeps the
    task of the event running while the acofxs run. Place it after
    `jtk-dvlp.re-frame.tasks/as-task`; without a task it behaves just like
    the plain one.
@@ -106,8 +107,8 @@
    (apply acofxs/inject-acofxs acofxs)))
 
 (defn inject-acofx
-  "Like `jtk-dvlp.re-frame.async-coeffects/inject-acofx`, see
-   `inject-acofxs`."
+  "Like [[jtk-dvlp.re-frame.async-coeffects/inject-acofx]], see
+   [[inject-acofxs]]."
   {:arglists
    '([id]
      [id value]

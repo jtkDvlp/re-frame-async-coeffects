@@ -3,9 +3,9 @@
    outside world that only arrives asynchronously -- a backend request, an
    IPC call, an async browser API.
 
-   Register a handler with `reg-acofx`, or reuse an existing effect with
-   `reg-acofx-by-fx`, and inject it into an event with `inject-acofx` or
-   `inject-acofxs`. The event handler then runs once, with every acofx
+   Register a handler with [[reg-acofx]], or reuse an existing effect with
+   [[reg-acofx-by-fx]], and inject it into an event with [[inject-acofx]]
+   or [[inject-acofxs]]. The event handler then runs once, with every acofx
    value in its coeffects, instead of a chain of load, success and
    further events."
   (:require
@@ -24,15 +24,15 @@
 ;; Registrar
 
 (def kind
-  "Registrar kind of acofx handlers, see `reg-acofx`."
+  "Registrar kind of acofx handlers, see [[reg-acofx]]."
   :acofx)
 
 (defn reg-acofx
   "Registers `handler` as async coeffect (acofx) under `id`, for use with
-   `inject-acofx` and `inject-acofxs`.
+   [[inject-acofx]] and [[inject-acofxs]].
 
    `handler` is called with the event's `coeffects` and the injection:
-   the options map given to `inject-acofxs`, with `:id`, `:value` and
+   the options map given to [[inject-acofxs]], with `:id`, `:value` and
    `:inject-key` filled in. The `:value` is the handler's to interpret,
    as with re-frame's `inject-cofx`. It returns a promise channel
    carrying the value to inject. A failure travels as an exception over
@@ -64,14 +64,14 @@
 
 (def ^{:private true, :rf/reg-event ::resolve-fx-acofx} resolve-fx-acofx-event
   "re-frame event hooked into an effect's success key by
-   `reg-acofx-by-fx`."
+   [[reg-acofx-by-fx]]."
   (rf/reg-event-fx ::resolve-fx-acofx
     (fn [_ [_ result-chan data]]
       {::fill-fx-acofx [result-chan data]})))
 
 (def ^{:private true, :rf/reg-event ::reject-fx-acofx} reject-fx-acofx-event
   "re-frame event hooked into an effect's failure key by
-   `reg-acofx-by-fx`. Turns what the effect reports into an exception,
+   [[reg-acofx-by-fx]]. Turns what the effect reports into an exception,
    carrying the event to dispatch on failure."
   (rf/reg-event-fx ::reject-fx-acofx
     (fn [_ [_ result-chan on-failure data]]
@@ -130,7 +130,8 @@
    like any other acofx.
 
    - `initial-args` is the effect's base configuration: a map, or a
-     function of the event's `coeffects` and the event that returns one.
+     function that is called with the event's `coeffects` and the event
+     and returns that map.
    - `on-success-key` is the effect's key for the success event.
    - `on-failure-key` is the effect's key for the failure event
      (optional; without it a failure is never noticed).
@@ -161,7 +162,7 @@
 
 (defn set-global-on-failure-event
   "Sets the event to dispatch when an acofx fails and neither the
-   handler nor the injection names one, see `inject-acofxs`. `nil`
+   handler nor the injection names one, see [[inject-acofxs]]. `nil`
    removes it again."
   [on-failure]
   (reset! !global-on-failure-event on-failure))
@@ -372,7 +373,7 @@
    once all of them are done.
 
    Each of `acofxs` is a vector `[id value opts]` of an acofx registered
-   with `reg-acofx`, the optional `value` for its handler -- like
+   with [[reg-acofx]], the optional `value` for its handler -- like
    re-frame's `inject-cofx` -- and an optional map of
 
    - `:inject-key` -- the key in the coeffects, defaults to `id`. Needed
@@ -381,12 +382,12 @@
      appended.
 
    On failure the event handler does not run. The event dispatched is the
-   one the acofx handler named (see `reg-acofx`), else the injection's
+   one the acofx handler named (see [[reg-acofx]]), else the injection's
    `:on-failure`, else the global one (see
-   `set-global-on-failure-event`). Without any, the failure is logged.
+   [[set-global-on-failure-event]]). Without any, the failure is logged.
 
    The event runs twice -- once to start the acofxs, once with their
-   values (once more per further `inject-acofxs` on the same event).
+   values (once more per further injection on the same event).
    Interceptors before this one see every run; their `:after`s run on
    the aborted ones too, with no effects to act on.
 
@@ -420,7 +421,7 @@
 
 (defn inject-acofx
   "Returns an interceptor that injects the single async coeffect `id`,
-   with `value` and `opts` as described in `inject-acofxs`."
+   with `value` and `opts` as described in [[inject-acofxs]]."
   {:arglists
    '([id]
      [id value]
