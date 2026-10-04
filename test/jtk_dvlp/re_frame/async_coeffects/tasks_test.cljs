@@ -46,7 +46,7 @@
 (defn- reg-gated-acofx!
   [fail?]
   (acofxs/reg-acofx ::gated
-    (fn [_coeffects]
+    (fn [_coeffects _injection]
       (let [?release @!release-acofx]
         (async/go
           (async/<! ?release)
@@ -62,7 +62,7 @@
   []
   (rf/reg-event-fx ::event
     [(tasks/as-task :loading)
-     (acofx-tasks/inject-acofx ::gated {:on-failure [::helpers/failed :x]})]
+     (acofx-tasks/inject-acofx ::gated nil {:on-failure [::helpers/failed :x]})]
     (fn [{::keys [gated]} _]
       (record-handled! gated)
       {})))

@@ -19,7 +19,7 @@
     (assoc coeffects ::now (js/Date.))))
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [{:keys [db]} & [delay-in-ms]]
+  (fn [{:keys [db]} {delay-in-ms :value}]
     (go
       (let [delay-in-ms
             (or delay-in-ms (::delay db) 1000)
@@ -57,27 +57,26 @@
 
 (defn- repo-meta-request
   [repo inject-key]
-  {:args [{:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}]
-   :inject-key inject-key})
+  [::http-request
+   {:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}
+   {:inject-key inject-key}])
 
 (rf/reg-event-fx ::do-work-with-async-stuff
   [;; Inject one single acofx, the global on-failure event applies.
-   ;; Without args it waits for the delay set in the input.
+   ;; Without a value it waits for the delay set in the input.
    (rf-acofxs/inject-acofx ::async-now)
 
    ;; Inject several acofxs, run concurrently.
    (rf-acofxs/inject-acofxs
-    ;; With args and a key of its own in the coeffects.
-    [::async-now {:args [5000], :inject-key ::async-now-5-secs-delayed}]
+    ;; With a value and a key of its own in the coeffects.
+    [::async-now 5000 {:inject-key ::async-now-5-secs-delayed}]
 
     ;; With its own on-failure event, instead of the global one.
-    [::github-repo-meta {:on-failure [::change-message "github failed"]}]
+    [::github-repo-meta nil {:on-failure [::change-message "github failed"]}]
 
     ;; The same acofx twice, under different keys.
-    [::http-request
-     (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)]
-    [::http-request
-     (repo-meta-request "core.async-helpers" ::core.async-helpers-meta)])
+    (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)
+    (repo-meta-request "core.async-helpers" ::core.async-helpers-meta))
 
    ;; An ordinary cofx, as usual.
    (rf/inject-cofx ::now)]

@@ -51,8 +51,8 @@ case is one event, and both requests run concurrently:
 
 (reg-event-fx ::init-my-view
   [(inject-acofxs
-    [::http {:args [{:uri "/some-data"}], :inject-key :some-data}]
-    [::http {:args [{:uri "/other-data"}], :inject-key :other-data}])]
+    [::http {:uri "/some-data"} {:inject-key :some-data}]
+    [::http {:uri "/other-data"} {:inject-key :other-data}])]
   (fn [{:keys [db some-data other-data]} _]
     {:db (assoc db ::some-data some-data, ::other-data other-data)}))
 ```
@@ -64,7 +64,8 @@ Full reference per namespace:
 [`…async-coeffects.tasks`](https://cljdoc.org/d/net.clojars.jtkdvlp/re-frame-async-coeffects/CURRENT/api/jtk-dvlp.re-frame.async-coeffects.tasks)
 
   * **Async coeffects.** `reg-acofx` registers a handler that gets the
-    event's coeffects and returns a channel with the value to inject;
+    event's coeffects and its injection and returns a channel with the
+    value to inject;
     `inject-acofx` and `inject-acofxs` put the values into the event's
     coeffects before its handler runs.
 
@@ -78,8 +79,8 @@ Full reference per namespace:
     the event, per registration and per injection.
 
   * **Error handling.** A failing acofx keeps the event handler from
-    running and dispatches an on-failure event instead -- named per
-    injection, per acofx or globally.
+    running and dispatches an on-failure event instead -- named by the
+    acofx, per injection or globally.
 
   * **re-frame-tasks integration.** With
     [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks), a task
@@ -111,7 +112,7 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
 
 (rf-acofxs/reg-acofx ::async-now
-  (fn [{:keys [db]} & [delay-in-ms]]
+  (fn [{:keys [db]} {delay-in-ms :value}]
     (go
       (let [delay-in-ms
             (or delay-in-ms (::delay db) 1000)
@@ -149,27 +150,26 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
 
 (defn- repo-meta-request
   [repo inject-key]
-  {:args [{:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}]
-   :inject-key inject-key})
+  [::http-request
+   {:uri (str "https://api.github.com/repos/jtkDvlp/" repo)}
+   {:inject-key inject-key}])
 
 (rf/reg-event-fx ::do-work-with-async-stuff
   [;; Inject one single acofx, the global on-failure event applies.
-   ;; Without args it waits for the delay set in the input.
+   ;; Without a value it waits for the delay set in the input.
    (rf-acofxs/inject-acofx ::async-now)
 
    ;; Inject several acofxs, run concurrently.
    (rf-acofxs/inject-acofxs
-    ;; With args and a key of its own in the coeffects.
-    [::async-now {:args [5000], :inject-key ::async-now-5-secs-delayed}]
+    ;; With a value and a key of its own in the coeffects.
+    [::async-now 5000 {:inject-key ::async-now-5-secs-delayed}]
 
     ;; With its own on-failure event, instead of the global one.
-    [::github-repo-meta {:on-failure [::change-message "github failed"]}]
+    [::github-repo-meta nil {:on-failure [::change-message "github failed"]}]
 
     ;; The same acofx twice, under different keys.
-    [::http-request
-     (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)]
-    [::http-request
-     (repo-meta-request "core.async-helpers" ::core.async-helpers-meta)])
+    (repo-meta-request "re-frame-tasks" ::re-frame-tasks-meta)
+    (repo-meta-request "core.async-helpers" ::core.async-helpers-meta))
 
    ;; An ordinary cofx, as usual.
    (rf/inject-cofx ::now)]
@@ -205,7 +205,7 @@ task they behave like the plain ones.
 
 (rf/reg-event-fx ::init-my-view
   [(tasks/as-task :loading)
-   (acofx-tasks/inject-acofx ::backend-resource [{:uri "load some data"}])]
+   (acofx-tasks/inject-acofx ::backend-resource {:uri "load some data"})]
   (fn [{:keys [db] ::keys [backend-resource]} _]
     {:db (assoc db ::data backend-resource)}))
 ```
@@ -216,12 +216,16 @@ Only this namespace needs re-frame-tasks (3.x) as dependency.
 
 **acofx handlers return the value, not the coeffects.** The handler still
 gets the coeffects first, but the channel carries the value to inject.
+Its second argument is the injection -- the options map with `:value`,
+`:inject-key` and `:on-failure` -- instead of the arguments spread out.
 
 ```clojure
 ;; 2.x
-(fn [coeffects] (go (assoc coeffects ::now (js/Date.))))
+(fn [coeffects delay-ms]
+  (go (<! (timeout delay-ms)) (assoc coeffects ::now (js/Date.))))
 ;; 3.x
-(fn [coeffects] (go (js/Date.)))
+(fn [coeffects {delay-ms :value}]
+  (go (<! (timeout delay-ms)) (js/Date.)))
 ```
 
 **`reg-acofx-by-fx` takes a map.**
@@ -240,10 +244,11 @@ gets the coeffects first, but the channel carries the value to inject.
 `:initial-args` may also be a function of the coeffects and the event. The
 new `:on-failure-event` names the event to dispatch when the effect fails.
 
-**Injection takes `[id opts]` per acofx.** Args, the key in the coeffects
-and the failure event are options of each acofx, not of the whole
-injection. The map form of `inject-acofxs` is gone; `:inject-key` replaces
-its keys.
+**Injection takes `[id value opts]` per acofx, like `inject-cofx`.**
+Instead of spread arguments, the handler gets one value. The key in the
+coeffects and the failure event are options of each acofx, not of the
+whole injection. The map form of `inject-acofxs` is gone; `:inject-key`
+replaces its keys.
 
 ```clojure
 ;; 2.x
@@ -252,32 +257,34 @@ its keys.
                {:error-dispatch [::failed]})
 ;; 3.x
 (inject-acofxs
- [::http {:args [{:uri "/a"}], :inject-key :a, :on-failure [::failed]}]
- [::http {:args [{:uri "/b"}], :inject-key :b, :on-failure [::failed]}])
+ [::http {:uri "/a"} {:inject-key :a, :on-failure [::failed]}]
+ [::http {:uri "/b"} {:inject-key :b, :on-failure [::failed]}])
 
 ;; 2.x
 (inject-acofx [::async-now 5000])
 ;; 3.x
-(inject-acofx ::async-now [5000])
+(inject-acofx ::async-now 5000)
 ```
 
-**Only `reg-acofx-by-fx` computes arguments.** In 2.x any injection
-argument that was a function got called with the coeffects and the event.
-Now a handler gets its arguments as given; it has the coeffects anyway.
-`reg-acofx-by-fx` computes them: its `:initial-args` may be a function of
-the coeffects and the event, and the injection argument may be a function
-that also gets the resolved `:initial-args` and returns the configuration
-to use -- so it can derive from the registration, down to removing keys:
+**Only `reg-acofx-by-fx` computes values.** In 2.x any injection argument
+that was a function got called with the coeffects and the event. Now a
+handler gets its value as given; it has the coeffects anyway.
+`reg-acofx-by-fx` computes it: its `:initial-args` may be a function of the
+coeffects and the event, and the injection value may be a function that
+also gets the resolved `:initial-args` and returns the configuration to
+use -- so it can derive from the registration, down to removing keys:
 
 ```clojure
-(inject-acofx ::http [(fn [_coeffects _event initial-args]
-                        (update initial-args :uri str "/details"))])
+(inject-acofx ::http (fn [_coeffects _event initial-args]
+                       (update initial-args :uri str "/details")))
 ```
 
 **`set-global-error-dispatch!` is now `set-global-on-failure-event`.** On
-failure the event dispatched is the injection's `:on-failure`, else the
-one the acofx handler put under `::on-failure` into its exception (for
-`reg-acofx-by-fx`: `:on-failure-event`), else the global one.
+failure the event dispatched is the one the acofx handler put under
+`::on-failure` into its exception, else the injection's `:on-failure`,
+else the global one. The handler gets the injection, so it decides
+whether the injection's event wins; `reg-acofx-by-fx` lets it win over
+its `:on-failure-event`.
 
 **The exception appended to the failure event is wrapped.** It is an
 `ex-info` with `:code ::acofx-error` and the failed acofx under `::acofx`;

@@ -14,7 +14,7 @@ Effect, Erfolgs-Event und weiterem Event.
 
 | Funktion | Zweck |
 |---|---|
-| `reg-acofx` | Registriert einen acofx-Handler unter einer Id (Registrar-Art `:acofx`). Er bekommt die Coeffects und die Args und liefert einen Kanal. |
+| `reg-acofx` | Registriert einen acofx-Handler unter einer Id (Registrar-Art `:acofx`). Er bekommt die Coeffects und die Injektions-Map und liefert einen Kanal. |
 | `reg-acofx-by-fx` | Macht einen bestehenden Effect (etwa `:http-xhrio`) zum acofx, indem er dessen Erfolgs- und Fehler-Event-Schlüssel belegt. |
 | `inject-acofx`, `inject-acofxs` | Interceptoren, die ein oder mehrere acofxs nebenläufig ausführen und die Ergebnisse in die Coeffects des Events legen. |
 | `set-global-on-failure-event` | Event für Fehler, für die sonst niemand ein Event nennt. |

@@ -85,11 +85,14 @@
    `inject-acofxs`."
   {:arglists
    '([id]
-     [id [:as args]]
-     [id {:keys [args on-failure inject-key]}])}
+     [id value]
+     [id value {:keys [on-failure inject-key]}])}
 
   ([id]
    (inject-acofx id nil))
 
   ([id value]
-   [track-task (acofxs/inject-acofx id value)]))
+   (inject-acofx id value nil))
+
+  ([id value opts]
+   [track-task (acofxs/inject-acofx id value opts)]))

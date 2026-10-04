@@ -26,19 +26,19 @@
 (defn- reg-test-acofxs!
   []
   (acofxs/reg-acofx ::value
-    (fn [_coeffects value]
+    (fn [_coeffects {:keys [value]}]
       (swap! !acofx-calls inc)
       (async/go
         (async/<! (core-async/timeout 1))
         value)))
 
   (acofxs/reg-acofx ::call-count
-    (fn [_coeffects]
+    (fn [_coeffects _injection]
       (let [calls (swap! !acofx-calls inc)]
         (async/go calls))))
 
   (acofxs/reg-acofx ::failing
-    (fn [_coeffects & [handler-on-failure]]
+    (fn [_coeffects {handler-on-failure :value}]
       (async/go
         (throw
          (ex-info "acofx under test failed"
@@ -56,7 +56,7 @@
       (async/go
         (reg-test-acofxs!)
         (rf/reg-event-fx ::event
-          [(acofxs/inject-acofx ::value [42])]
+          [(acofxs/inject-acofx ::value 42)]
           (fn [{::keys [value]} _]
             (record-handled! value)
             {}))
@@ -65,6 +65,25 @@
         (is (async/<! (<eventually #(seq @!handled))))
         (is (= [42] @!handled))))))
 
+(deftest passes-the-injection-to-the-handler
+  (async done
+    (run-async done
+      (async/go
+        (acofxs/reg-acofx ::injection
+          (fn [_coeffects injection]
+            (async/go injection)))
+
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::injection :a {:inject-key :i})]
+          (fn [{:keys [i]} _]
+            (record-handled! (select-keys i [:id :value :inject-key]))
+            {}))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @!handled))))
+        (is (= [{:id ::injection, :value :a, :inject-key :i}]
+               @!handled))))))
+
 (deftest injects-the-same-acofx-under-different-keys
   (async done
     (run-async done
@@ -72,8 +91,8 @@
         (reg-test-acofxs!)
         (rf/reg-event-fx ::event
           [(acofxs/inject-acofxs
-            [::value {:args [:a], :inject-key :a}]
-            [::value {:args [:b], :inject-key :b}])]
+            [::value :a {:inject-key :a}]
+            [::value :b {:inject-key :b}])]
           (fn [{:keys [a b]} _]
             (record-handled! [a b])
             {}))
@@ -90,7 +109,7 @@
       (async/go
         (let [!started (atom #{})]
           (acofxs/reg-acofx ::rendezvous
-            (fn [_coeffects key]
+            (fn [_coeffects {key :value}]
               (swap! !started conj key)
               (async/go
                 (when-not (async/<! (<eventually
@@ -100,9 +119,9 @@
 
           (rf/reg-event-fx ::event
             [(acofxs/inject-acofxs
-              [::rendezvous {:args [:a], :inject-key :a}]
-              [::rendezvous {:args [:b], :inject-key :b
-                             :on-failure [::helpers/failed :b]}])]
+              [::rendezvous :a {:inject-key :a}]
+              [::rendezvous :b {:inject-key :b
+                                :on-failure [::helpers/failed :b]}])]
             (fn [{:keys [a b]} _]
               (record-handled! [a b])
               {}))
@@ -120,7 +139,7 @@
       (async/go
         (reg-test-acofxs!)
         (rf/reg-event-fx ::event
-          [rf/trim-v (acofxs/inject-acofx ::value [:v])]
+          [rf/trim-v (acofxs/inject-acofx ::value :v)]
           (fn [{::keys [value]} args]
             (record-handled! [value args])
             {}))
@@ -187,7 +206,7 @@
       (async/go
         (reg-test-acofxs!)
         (rf/reg-event-fx ::event
-          [(acofxs/inject-acofx ::value [:v])]
+          [(acofxs/inject-acofx ::value :v)]
           (fn [_ _]
             (throw (ex-info "handler under test failed" {}))))
 
@@ -219,7 +238,7 @@
                      (update context :queue empty)))))]
 
           (rf/reg-event-fx ::event
-            [(acofxs/inject-acofx ::value [:v]) abort-once]
+            [(acofxs/inject-acofx ::value :v) abort-once]
             (fn [{::keys [value]} _]
               (record-handled! value)
               {}))
@@ -230,15 +249,15 @@
           (is (= 1 @!acofx-calls) "acofxs started over after the abort")
           (is (empty? (parked-results))))))))
 
-(deftest passes-args-to-plain-acofxs-as-given
-  ;; Only `reg-acofx-by-fx` computes function args. Any other handler
+(deftest passes-values-to-plain-acofxs-as-given
+  ;; Only `reg-acofx-by-fx` computes function values. Any other handler
   ;; gets a function as the value it is.
   (async done
     (run-async done
       (async/go
         (reg-test-acofxs!)
         (rf/reg-event-fx ::event
-          [(acofxs/inject-acofx ::value [inc])]
+          [(acofxs/inject-acofx ::value inc)]
           (fn [{::keys [value]} _]
             (record-handled! value)
             {}))
@@ -256,8 +275,8 @@
       (async/go
         (reg-test-acofxs!)
         (rf/reg-event-fx ::event
-          [(acofxs/inject-acofx ::value {:args [:outer], :inject-key :a})
-           (acofxs/inject-acofx ::value {:args [:inner], :inject-key :b})]
+          [(acofxs/inject-acofx ::value :outer {:inject-key :a})
+           (acofxs/inject-acofx ::value :inner {:inject-key :b})]
           (fn [{:keys [a b]} _]
             (record-handled! [a b])
             {}))
@@ -286,7 +305,7 @@
                  context))]
 
           (rf/reg-event-fx ::event
-            [spy (acofxs/inject-acofx ::value [:v])]
+            [spy (acofxs/inject-acofx ::value :v)]
             (fn [_ _]
               (record-handled! :done)
               {}))
@@ -303,11 +322,11 @@
 ;; Failure
 
 (defn- <dispatch-failing-event!
-  [inject-opts]
+  [handler-on-failure inject-opts]
   (async/go
     (reg-test-acofxs!)
     (rf/reg-event-fx ::event
-      [(acofxs/inject-acofx ::failing inject-opts)]
+      [(acofxs/inject-acofx ::failing handler-on-failure inject-opts)]
       (fn [_ _]
         (record-handled! :handler-ran)
         {}))
@@ -316,16 +335,18 @@
     (async/<! (<eventually #(seq @!failures)))
     (async/<! (<settle))))
 
-(deftest dispatches-the-injections-on-failure
+(deftest dispatches-the-handlers-on-failure-first
+  ;; The handler gets the injection, so it decides whether the
+  ;; injection's `:on-failure` wins. What it names is final.
   (async done
     (run-async done
       (async/go
         (acofxs/set-global-on-failure-event [::helpers/failed :global])
         (async/<! (<dispatch-failing-event!
-                   {:args [[::helpers/failed :handler]]
-                    :on-failure [::helpers/failed :injection]}))
+                   [::helpers/failed :handler]
+                   {:on-failure [::helpers/failed :injection]}))
 
-        (is (= [:injection] (map first @!failures)))
+        (is (= [:handler] (map first @!failures)))
         (is (empty? @!handled) "handler ran despite the failure")
         (is (= ::boom (-> @!failures
                           (first)
@@ -334,15 +355,16 @@
                           (ex-data)
                           (:code))))))))
 
-(deftest dispatches-the-handlers-on-failure-without-injections
+(deftest dispatches-the-injections-on-failure-without-the-handlers
   (async done
     (run-async done
       (async/go
         (acofxs/set-global-on-failure-event [::helpers/failed :global])
         (async/<! (<dispatch-failing-event!
-                   {:args [[::helpers/failed :handler]]}))
+                   nil
+                   {:on-failure [::helpers/failed :injection]}))
 
-        (is (= [:handler] (map first @!failures)))
+        (is (= [:injection] (map first @!failures)))
         (is (empty? @!handled))))))
 
 (deftest dispatches-the-global-on-failure-last
@@ -390,9 +412,9 @@
            :on-failure-key :on-failure})
 
         (rf/reg-event-fx ::event
-          [(acofxs/inject-acofx ::request {:inject-key :initial})
-           (acofxs/inject-acofx ::request {:args [{:response :given}]
-                                           :inject-key :given})]
+          [(acofxs/inject-acofx ::request nil {:inject-key :initial})
+           (acofxs/inject-acofx ::request {:response :given}
+                                {:inject-key :given})]
           (fn [{:keys [initial given]} _]
             (record-handled! [initial given])
             {}))
@@ -413,7 +435,7 @@
            :on-failure-event [::helpers/failed :registered]})
 
         (rf/reg-event-fx ::event
-          [(acofxs/inject-acofx ::request [{:error {:status 500}}])]
+          [(acofxs/inject-acofx ::request {:error {:status 500}})]
           (fn [_ _]
             (record-handled! :handler-ran)
             {}))
@@ -423,6 +445,32 @@
         (let [[[tag ex]] @!failures]
           (is (= :registered tag))
           (is (= {:status 500} (-> ex (ex-cause) (ex-data) (:error)))))
+        (is (empty? @!handled))))))
+
+(deftest prefers-the-injections-on-failure-for-an-effect
+  ;; The registered event is the default for every injection; one that
+  ;; names its own is the more specific.
+  (async done
+    (run-async done
+      (async/go
+        (reg-fake-request-fx!)
+        (acofxs/reg-acofx-by-fx ::request
+          {:fx-id ::fake-request
+           :on-success-key :on-success
+           :on-failure-key :on-failure
+           :on-failure-event [::helpers/failed :registered]})
+
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofx ::request
+                                {:error {:status 500}}
+                                {:on-failure [::helpers/failed :injection]})]
+          (fn [_ _]
+            (record-handled! :handler-ran)
+            {}))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @!failures))))
+        (is (= [:injection] (map first @!failures)))
         (is (empty? @!handled))))))
 
 (deftest computes-the-initial-args-of-an-effect
@@ -446,7 +494,7 @@
         (is (async/<! (<eventually #(seq @!handled))))
         (is (= [:from-event] @!handled))))))
 
-(deftest computes-the-injection-args-of-an-effect
+(deftest computes-the-injection-value-of-an-effect
   ;; A function given at injection gets the resolved initial args and
   ;; replaces them, so it can derive from the registered configuration --
   ;; down to dropping a key a merge could never remove.
@@ -468,10 +516,10 @@
           (rf/reg-event-fx ::event
             [(acofxs/inject-acofx
               ::request
-              [(fn [_coeffects [_ suffix] initial-args]
-                 (-> initial-args
-                     (dissoc :error)
-                     (update :response vector suffix)))])]
+              (fn [_coeffects [_ suffix] initial-args]
+                (-> initial-args
+                    (dissoc :error)
+                    (update :response vector suffix))))]
             (fn [{::keys [request]} _]
               (record-handled! request)
               {}))
