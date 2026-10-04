@@ -101,6 +101,45 @@
         (is (async/<! (<eventually #(seq @!handled))))
         (is (= [[:a :b]] @!handled))))))
 
+(deftest injects-acofxs-keyed-by-a-map
+  (async done
+    (run-async done
+      (async/go
+        (reg-test-acofxs!)
+        (rf/reg-event-fx ::event
+          [(acofxs/inject-acofxs
+            {:a [::value :a]
+             :b [::failing nil {:on-failure [::helpers/failed :b]}]})]
+          (fn [_ _]
+            (record-handled! :handler-ran)
+            {}))
+
+        (rf/reg-event-fx ::other-event
+          [(acofxs/inject-acofxs
+            {:a [::value :a]
+             :b [::value :b]})]
+          (fn [{:keys [a b]} _]
+            (record-handled! [a b])
+            {}))
+
+        (rf/dispatch [::other-event])
+        (is (async/<! (<eventually #(seq @!handled))))
+        (is (= [[:a :b]] @!handled))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually #(seq @!failures))))
+        (is (= [:b] (map first @!failures))
+            "the opts of a keyed acofx got lost")))))
+
+(deftest rejects-a-map-key-and-an-inject-key-at-once
+  (let [conflict
+        (try
+          (acofxs/inject-acofxs {:a [::value :a {:inject-key :x}]})
+          nil
+          (catch :default e e))]
+
+    (is (= ::acofxs/inject-key-conflict (-> conflict (ex-data) (:code))))))
+
 (deftest runs-acofxs-concurrently
   ;; Each acofx only finishes once the other one has started. Run one
   ;; after the other, the first would wait for good and fail.

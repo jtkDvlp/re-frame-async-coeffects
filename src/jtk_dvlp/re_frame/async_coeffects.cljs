@@ -367,6 +367,29 @@
       (update :coeffects merge results)
       (ensure-results-cleanup)))
 
+(defn- keyed-acofx
+  [[inject-key [id value opts]]]
+  (when (contains? opts :inject-key)
+    (throw
+     (ex-info
+      "acofx keyed twice: by the map and by :inject-key"
+      {:code ::inject-key-conflict
+       :inject-key inject-key
+       :acofx [id value opts]})))
+
+  [id value (assoc opts :inject-key inject-key)])
+
+(defn- keyed-acofxs?
+  [acofxs]
+  (and (= 1 (count acofxs))
+       (map? (first acofxs))))
+
+(defn- expand-keyed-acofxs
+  [acofxs]
+  (if (keyed-acofxs? acofxs)
+    (mapv keyed-acofx (first acofxs))
+    acofxs))
+
 (defn inject-acofxs
   "Returns an interceptor that injects the async coeffects `acofxs` into
    the event's coeffects. They run concurrently; the event handler runs
@@ -380,6 +403,9 @@
      to inject the same acofx more than once.
    - `:on-failure` -- event to dispatch on failure, the exception
      appended.
+
+   Instead, `acofxs` may be a single map of inject key to `[id value
+   opts]`. Its keys replace `:inject-key`; giving both throws.
 
    On failure the event handler does not run. The event dispatched is the
    one the acofx handler named (see [[reg-acofx]]), else the injection's
@@ -396,13 +422,23 @@
            [::http {:uri \"/a\"} {:inject-key :a}]
            [::http {:uri \"/b\"} {:inject-key :b}])]
          (fn [{:keys [db a b]} _]
-           {:db (assoc db ::a a, ::b b)}))"
+           {:db (assoc db ::a a, ::b b)}))
+
+       ;; the same, keyed by a map
+       (inject-acofxs
+        {:a [::http {:uri \"/a\"}]
+         :b [::http {:uri \"/b\"}]})"
+  {:arglists
+   '([& acofxs]
+     [acofxs-by-inject-key])}
   [& acofxs]
   (let [inject-id
         (random-uuid)
 
         acofxs
-        (mapv normalize-acofx acofxs)]
+        (->> acofxs
+             (expand-keyed-acofxs)
+             (mapv normalize-acofx))]
 
     (rf/->interceptor
      :id ::inject-acofxs
