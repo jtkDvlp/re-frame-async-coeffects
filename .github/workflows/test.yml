@@ -1,0 +1,80 @@
+name: test
+
+# NOTE: Reusable, so the CI run on a pull request and the run before
+# publishing provably check the same thing.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: >
+          Git ref to check. Empty means the triggering commit.
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          lein: latest
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: m2-${{ hashFiles('project.clj') }}
+          restore-keys: m2-
+
+      # WATCHOUT: `+test,-dev` is the profile set that holds: `:test`
+      # brings the ClojureScript compiler the library itself does not
+      # declare, and dropping `:dev` keeps figwheel out, so the library
+      # has to compile against what a consumer actually gets.
+      #
+      # WATCHOUT: The compiler reports an unknown var as a WARNING and
+      # still exits 0 -- `:warnings-as-errors` does not exist in
+      # cljs.main. The output is therefore examined.
+      - name: Compile library
+        run: |
+          set -o pipefail
+          log="$(mktemp)"
+
+          for ns in jtk-dvlp.re-frame.async-coeffects \
+                    jtk-dvlp.re-frame.async-coeffects.tasks; do
+            lein with-profile +test,-dev run -m cljs.main \
+              --optimizations advanced \
+              --output-dir "target/ci/$ns" \
+              --output-to "target/ci/$ns/main.js" \
+              --compile "$ns" 2>&1 | tee -a "$log"
+          done
+
+          if grep -E '^WARNING' "$log"; then
+            echo "::error::The compiler reports warnings, see above."
+            exit 1
+          fi
+
+      # WATCHOUT: Compiled to a file and run with node, not through
+      # `cljs.main --main`. Two things there produce a green job that
+      # tested nothing: `cljs.main` does not pass on the exit code of the
+      # node process it spawns, and the node target only calls `-main`
+      # when `*main-cli-fn*` is set (it is, in the runner).
+      - name: Run tests
+        run: |
+          lein with-profile +test,-dev run -m cljs.main \
+            --target node \
+            --output-dir target/test \
+            --output-to target/test/main.js \
+            --compile-opts '{:main jtk-dvlp.re-frame.test-runner}' \
+            --compile jtk-dvlp.re-frame.test-runner
+
+          node target/test/main.js

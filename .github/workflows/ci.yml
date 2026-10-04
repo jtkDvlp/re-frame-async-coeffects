@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      # NOTE: The 3.0 work lives on `v3.0.0` until it lands on master.
+      # Drop this line then.
+      - v3.0.0
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  # NOTE: The version follows from the commit messages. A commit without a
+  # Conventional Commits subject on the main branch is missing from the
+  # changelog, and the next version may come out too low. Pull requests
+  # are merged, not squashed, so every single commit is checked, not only
+  # the title.
+  commit-messages:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check conventional commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          types='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+          pattern="^($types)(\([^)]+\))?!?: .+"
+          failed=0
+
+          # WATCHOUT: --no-merges on purpose. A merge commit's subject
+          # comes from git and never follows the convention.
+          while IFS= read -r subject; do
+            [ -z "$subject" ] && continue
+            if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+              echo "::error::Not a conventional commit: $subject"
+              failed=1
+            fi
+          done < <(git log --no-merges --format=%s "$BASE_SHA..$HEAD_SHA")
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Format: <type>[(<scope>)][!]: <description>"
+            echo "Types: $types"
+            exit 1
+          fi
+
+          echo "All commit messages follow Conventional Commits."

@@ -1,278 +1,437 @@
 (ns jtk-dvlp.re-frame.async-coeffects
+  "Async coeffects (acofx) for re-frame: input an event needs from the
+   outside world that only arrives asynchronously -- a backend request, an
+   IPC call, an async browser API.
+
+   Register a handler with [[reg-acofx]], or reuse an existing effect with
+   [[reg-acofx-by-fx]], and inject it into an event with [[inject-acofx]]
+   or [[inject-acofxs]]. The event handler then runs once, with every acofx
+   value in its coeffects, instead of a chain of load, success and
+   further events."
   (:require
-   [cljs.core.async]
-   [jtk-dvlp.async :refer [go <!] :as a]
-   [jtk-dvlp.async.interop.promise :refer [promise-go promise-chan]]
+   [cljs.core.async :as core-async]
 
-   [re-frame.core :refer [dispatch reg-fx reg-event-fx]]
-   [re-frame.registrar :refer [register-handler get-handler]]
-   [re-frame.interceptor :refer [->interceptor]]
-   [re-frame.fx :as fx]))
+   [re-frame.core :as rf]
+   [re-frame.fx :as rf-fx]
+   [re-frame.loggers :as rf-loggers]
+   [re-frame.registrar :as rf-registrar]
+
+   [jtk-dvlp.async :as async]
+   [jtk-dvlp.async.interop.promise :refer [promise-chan]]))
 
 
-(def kind :acofx)
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Registrar
+
+(def kind
+  "Registrar kind of acofx handlers, see [[reg-acofx]]."
+  :acofx)
 
 (defn reg-acofx
-  "Register the given async-coeffect `handler` for the given `id`, for later use within `inject-acofx`:
+  "Registers `handler` as async coeffect (acofx) under `id`, for use with
+   [[inject-acofx]] and [[inject-acofxs]].
 
-    - `id` is keyword, often namespaced.
-    - `handler` is a function which takes either one or more arguements, the first of which is always `coeffects` and which returns an updated `coeffects` as `cljs.core.async/chan`.
+   `handler` is called with the event's `coeffects` and the injection:
+   the options map given to [[inject-acofxs]], with `:id`, `:value` and
+   `:inject-key` filled in. The `:value` is the handler's to interpret,
+   as with re-frame's `inject-cofx`. It returns a promise channel
+   carrying the value to inject. A failure travels as an exception over
+   that channel, see `jtk-dvlp.async`.
 
-  See also: `inject-acofx`
-  "
+   To name the event to dispatch on failure, put it under `::on-failure`
+   into the `ex-data` of that exception. Without one, the injection's
+   `:on-failure` applies, then the global one -- so a handler that wants
+   to defer to the injection leaves it out, and one that wants to
+   override takes the injection's into account itself.
+
+       (reg-acofx ::now
+         (fn [_coeffects {delay-ms :value}]
+           (go
+             (<! (timeout delay-ms))
+             (js/Date.))))"
   [id handler]
-  (register-handler kind id handler))
+  (rf-registrar/register-handler kind id handler))
 
-(reg-fx ::put-on-chan
-  (fn [[chan data]]
-    (cljs.core.async/put! chan data)))
+(def ^{:private true, :rf/reg-fx ::fill-fx-acofx} fill-fx-acofx-fx
+  "re-frame effect to put `data` onto the acofx channel `chan` and close
+   it. `nil` only closes, the acofx then injects `nil`."
+  (rf/reg-fx ::fill-fx-acofx
+    (fn [[chan data]]
+      (when (some? data)
+        (core-async/put! chan data))
+      (core-async/close! chan)
+      nil)))
 
-(reg-event-fx ::acofx-by-fx-success
-  (fn [_ [_ result data]]
-    {::put-on-chan [result data]}))
+(def ^{:private true, :rf/reg-event ::resolve-fx-acofx} resolve-fx-acofx-event
+  "re-frame event hooked into an effect's success key by
+   [[reg-acofx-by-fx]]."
+  (rf/reg-event-fx ::resolve-fx-acofx
+    (fn [_ [_ result-chan data]]
+      {::fill-fx-acofx [result-chan data]})))
 
-(reg-event-fx ::acofx-by-fx-error
-  (fn [_ [_ result data]]
-    (let [data
-          (cond->> data
-            (not (a/exception? data))
-            (ex-info "acofx error" {:code :acofx-error}))]
-      {::put-on-chan [result data]})))
+(def ^{:private true, :rf/reg-event ::reject-fx-acofx} reject-fx-acofx-event
+  "re-frame event hooked into an effect's failure key by
+   [[reg-acofx-by-fx]]. Turns what the effect reports into an exception,
+   carrying the event to dispatch on failure."
+  (rf/reg-event-fx ::reject-fx-acofx
+    (fn [_ [_ result-chan on-failure data]]
+      (let [exception
+            (ex-info
+             "fx-acofx handler failed"
+             {:code ::fx-acofx-error
+              :error data
+              ::on-failure on-failure})]
+
+        {::fill-fx-acofx [result-chan exception]}))))
+
+(defn- resolve-initial-args
+  [{:keys [event] :as coeffects} initial-args]
+  (if (fn? initial-args)
+    (initial-args coeffects event)
+    initial-args))
+
+(defn- resolve-fx-args
+  "The effect's configuration for one injection: `inject-value` merged over
+   the `initial-args`, or -- given as function -- whatever it makes of
+   them."
+  [{:keys [event] :as coeffects} initial-args inject-value]
+  (let [initial-args (resolve-initial-args coeffects initial-args)]
+    (if (fn? inject-value)
+      (inject-value coeffects event initial-args)
+      (merge initial-args inject-value))))
+
+(defn- fx-acofx-handler
+  [{:keys [fx-id initial-args on-success-key on-failure-key
+           on-failure-event]}]
+  (fn [coeffects {inject-value :value, :keys [on-failure]}]
+    (let [acofx
+          (promise-chan)
+
+          fx-hooks
+          (cond-> {on-success-key [::resolve-fx-acofx acofx]}
+            on-failure-key
+            (assoc on-failure-key
+              [::reject-fx-acofx acofx (or on-failure on-failure-event)]))
+
+          fx-args
+          (-> coeffects
+              (resolve-fx-args initial-args inject-value)
+              (merge fx-hooks))
+
+          fx-handler
+          (rf-registrar/get-handler rf-fx/kind fx-id true)]
+
+      (fx-handler fx-args)
+      acofx)))
 
 (defn reg-acofx-by-fx
-  "Register the given effect `fx` as coeffect for the given `id`, for later use within `inject-acofx`:
+  "Registers the effect `fx-id` as acofx under `id`, so an effect that
+   reports its result through events (e.g. `:http-xhrio`) can be injected
+   like any other acofx.
 
-    - `id` is keyword, often namespaced.
-    - `fx` is the effect id to use as coeffect.
-    - `on-success-key` is the key of `fx` to register a success event vector.
-    - `on-error-key` is the key of `fx` to register a error event vector (optional).
-    - `fx-map` is a predefined map to configure the fx as the fx supports
+   - `initial-args` is the effect's base configuration: a map, or a
+     function that is called with the event's `coeffects` and the event
+     and returns that map.
+   - `on-success-key` is the effect's key for the success event.
+   - `on-failure-key` is the effect's key for the failure event
+     (optional; without it a failure is never noticed).
+   - `on-failure-event` is the event to dispatch on failure (optional).
+     An `:on-failure` given at injection replaces it.
 
-  See also: `inject-acofx`
-  "
-  [id fx on-success-key & [on-error-key fx-map]]
-  (reg-acofx id
-    (fn [coeffects & [fx-map' & rest-args]]
-      (let [result-chan
-            (promise-chan)
+   The `value` given at injection configures the effect for that
+   injection:
 
-            hook-map
-            (cond-> {on-success-key [::acofx-by-fx-success result-chan]}
-              on-error-key
-              (assoc on-error-key [::acofx-by-fx-error result-chan]))
+   - a map is merged over `initial-args`,
+   - a function is called with the `coeffects`, the event and the
+     resolved `initial-args`, and what it returns replaces them -- so it
+     can derive from the registered configuration, down to removing
+     keys.
 
-            handler
-            (get-handler fx/kind fx true)]
+   WATCHOUT: Only the first argument the effect hands to its success or
+   failure event is taken as result -- that is what `:http-xhrio` and
+   most effects use. The failure's argument ends up under `:error` in the
+   `ex-data` of the exception."
+  {:arglists
+   '([id {:keys [fx-id initial-args on-success-key on-failure-key
+                 on-failure-event]}])}
+  [id options]
+  (reg-acofx id (fx-acofx-handler options)))
 
-        (apply handler (merge fx-map fx-map' hook-map) rest-args)
-        (a/map (partial assoc coeffects id) [result-chan])))))
+(defonce ^:private !global-on-failure-event
+  (atom nil))
+
+(defn set-global-on-failure-event
+  "Sets the event to dispatch when an acofx fails and neither the
+   handler nor the injection names one, see [[inject-acofxs]]. `nil`
+   removes it again."
+  [on-failure]
+  (reset! !global-on-failure-event on-failure))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Running acofxs
+
+(defn- normalize-acofx
+  [[id value opts]]
+  (assoc opts
+    :id id
+    :value value
+    :inject-key (:inject-key opts id)))
+
+(defn- <run-acofx!
+  [coeffects {:keys [id] :as acofx}]
+  (async/go
+    (try
+      (let [<handler
+            (rf-registrar/get-handler kind id true)
+
+            result
+            (async/<! (<handler coeffects acofx))]
+
+        (assoc acofx :inject-value result))
+
+      (catch :default e
+        (ex-info
+         "acofx handler failed"
+         {:code ::acofx-error
+          ::acofx acofx}
+         e)))))
+
+(defn- <run-acofxs!
+  "Runs all `acofxs` concurrently. Yields a map of inject key to value, or
+   the first failure."
+  [coeffects acofxs]
+  (async/go
+    (->> acofxs
+         (mapv (partial <run-acofx! coeffects))
+         (core-async/merge)
+         (async/reduce conj [])
+         (async/<!)
+         (map (juxt :inject-key :inject-value))
+         (into {}))))
+
+(defn- on-failure-event
+  "The event to dispatch for the acofx failure `ex`: the one the handler
+   put into its exception, else the one given at injection, else the
+   global one."
+  [ex]
+  (let [{:keys [on-failure]}
+        (-> ex (ex-data) (::acofx))
+
+        handler-on-failure
+        (-> ex (ex-cause) (ex-data) (::on-failure))]
+
+    ;; NOTE: The global event is read here, at failure time, and not
+    ;; when the acofx is normalized. Injection happens when the event is
+    ;; registered, usually at namespace load -- before an app gets to
+    ;; call `set-global-on-failure-event`.
+    (or handler-on-failure on-failure @!global-on-failure-event)))
+
+(defn- dispatch-failure!
+  [ex]
+  (if-let [event (on-failure-event ex)]
+    (rf/dispatch (conj event ex))
+    (rf-loggers/console
+     :error "re-frame-async-coeffects: acofx failed, no on-failure event"
+     ex)))
+
+
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Interceptor
+;;
+;; An event with acofxs runs more than once. A run that reaches an
+;; injection without results starts its acofxs and is aborted before the
+;; handler. Once all of them are done, the results are parked in
+;; `!results` and the event is dispatched again, marked with a
+;; `::dispatch-id`. Later runs find the parked results and inject them;
+;; they are removed right before the event handler runs.
+;;
+;; WATCHOUT: `:acoeffects` in the context (with `:dispatch-id` and
+;; `:?error`) and `::dispatch-id` in the event meta are read by
+;; re-frame-tasks to follow an event across its runs. Renaming them
+;; breaks that silently.
 
 (defonce ^:private !results
   (atom {}))
 
-(def ^:private !global-error-dispatch
-  (atom nil))
+(defn- dispatch-id
+  [context]
+  (-> context (:coeffects) (:original-event) (meta) (::dispatch-id)))
 
-(def set-global-error-dispatch!
-  "Sets global error dispatch."
-  (partial reset! !global-error-dispatch))
+(defn- ensure-dispatch-id
+  [context]
+  (assoc-in context [:acoeffects :dispatch-id]
+            (or (dispatch-id context) (random-uuid))))
 
-(defn- fx-handler-run?
-  [{:keys [stack]}]
-  (->> stack
-       (filter #(= :fx-handler (:id %)))
-       (seq)))
+(defn- parked-results
+  [context]
+  (let [dispatch-id (get-in context [:acoeffects :dispatch-id])]
+    (get @!results dispatch-id {})))
 
-(defn- compute-argument
-  [{:keys [event] :as coeffects} arg-or-fn]
-  (if (fn? arg-or-fn)
-    (arg-or-fn coeffects event)
-    arg-or-fn))
+(defn- cleanup-results
+  [dispatch-id]
+  (rf/->interceptor
+   :id ::cleanup-results
+   :before
+   (fn [context]
+     (swap! !results dissoc dispatch-id)
+     context)))
 
-(defn- run-acofx!
-  [coeffects {:keys [id data-id handler args]}]
-  (go
-    (let [result
-          (->> args
-               (mapv (partial compute-argument coeffects))
-               (apply handler coeffects)
-               (<!)
-               (#(get % id)))]
+(defn- insert-before-event-handler
+  "Inserts `interceptor` before the last one in `queue`, the event handler.
 
-      {data-id result})))
+   NOTE: The handler is last by construction -- re-frame puts global
+   interceptors in front. And this runs from within the queue, so nothing
+   has emptied it yet."
+  [queue interceptor]
+  (-> #queue []
+      (into (butlast queue))
+      (conj interceptor)
+      (conj (last queue))))
 
-(defn- run-acofxs!
-  [{:keys [acoeffects coeffects] :as context}
-   {:keys [error-dispatch acofxs] inject-id :id}]
+(defn- ensure-results-cleanup
+  "Makes the run remove the parked results right before its event
+   handler, once per run.
 
-  (let [error-dispatch
-        (or error-dispatch @!global-error-dispatch)
+   NOTE: Not earlier and not later. Any interceptor between here and
+   the handler may still abort the run -- a second injection, a
+   `wait-for` -- and the next run needs the results again. And a handler
+   that throws never gets to an `:after`, so removing them there would
+   leave them parked for good."
+  [context]
+  (if (get-in context [:acoeffects :cleanup-scheduled?])
+    context
+    (let [dispatch-id (get-in context [:acoeffects :dispatch-id])]
+      (-> context
+          (update :queue insert-before-event-handler
+                  (cleanup-results dispatch-id))
+          (assoc-in [:acoeffects :cleanup-scheduled?] true)))))
 
-        dispatch-id
-        (:dispatch-id acoeffects)
+(defn- abort-event
+  "Ends the run before the handler. The `:after`s of the interceptors so
+   far still run, with no effects to act on."
+  [context]
+  (update context :queue empty))
+
+(defn- event-to-redispatch
+  [context]
+  (let [dispatch-id (get-in context [:acoeffects :dispatch-id])]
+    (-> context
+        (:coeffects)
+        ;; NOTE: `:original-event`, not `:event`. Interceptors like
+        ;; `trim-v` alter `:event`, and they run again on the next run.
+        (:original-event)
+        (vary-meta assoc ::dispatch-id dispatch-id))))
+
+(defn- run-acofxs-and-redispatch!
+  "Starts the `acofxs`, then parks their results under `inject-id` and
+   dispatches the event again -- or dispatches the failure. Returns a
+   promise channel that yields the failure or closes on success."
+  [context inject-id acofxs]
+  (let [dispatch-id
+        (get-in context [:acoeffects :dispatch-id])
 
         event
-        (-> coeffects
-            (:event)
-            (vary-meta assoc ::dispatch-id dispatch-id))
+        (event-to-redispatch context)
 
-        ?acofx
-        (promise-go
-         (try
-           (->> acofxs
-                (map (partial run-acofx! coeffects))
-                (cljs.core.async/merge)
-                (a/reduce merge {})
-                (<!)
-                (swap! !results assoc-in [dispatch-id inject-id]))
+        ?results
+        (<run-acofxs! (:coeffects context) acofxs)
 
-           (dispatch event)
+        ?error
+        (promise-chan)]
 
-           (catch ExceptionInfo e
-             (when error-dispatch
-               (->> e
-                    (conj error-dispatch)
-                    (dispatch)))
-             (swap! !results dissoc dispatch-id)
-             (throw e))))]
+    (core-async/take!
+     ?results
+     (fn [acofx-results]
+       (if (async/exception? acofx-results)
+         (do
+           (dispatch-failure! acofx-results)
+           (core-async/put! ?error acofx-results))
+         (do
+           (swap! !results assoc-in [dispatch-id inject-id] acofx-results)
+           (rf/dispatch event)
+           (core-async/close! ?error)))))
 
-    (assoc-in context [:acoeffects :?error] ?acofx)))
+    ?error))
 
-(defn- abort-original-event
-  [context]
+(defn- start-acofxs
+  [context inject-id acofxs]
   (-> context
-      (update :queue empty)
-      (update :stack rest)))
+      (assoc-in [:acoeffects :?error]
+                (run-acofxs-and-redispatch! context inject-id acofxs))
+      (abort-event)))
 
-(defn- run-acofxs-n-abort-event!
-  [context acofxs-n-options]
+(defn- inject-results
+  [context results]
   (-> context
-      (run-acofxs! acofxs-n-options)
-      (abort-original-event)))
-
-(defn- normalize-acofx
-  [cofx]
-  (cond
-    (keyword? cofx)
-    {:id cofx
-     :handler (get-handler kind cofx true)
-     :args-fn (constantly nil)}
-
-    (and (vector? cofx))
-    {:id (first cofx)
-     :handler (get-handler kind (first cofx) true)
-     :args (next cofx)}
-
-    :else cofx))
-
-(defn- normalize-acofxs
-  [acofxs]
-  (if (map? acofxs)
-    (for [[data-id cofx] acofxs]
-      (-> cofx
-          (normalize-acofx)
-          (assoc :data-id data-id)))
-    (for [cofx acofxs
-          :let [{:keys [id] :as cofx}
-                (normalize-acofx cofx)]]
-      (assoc cofx :data-id id))))
+      (update :coeffects merge results)
+      (ensure-results-cleanup)))
 
 (defn inject-acofxs
-  "Give as much acofxs as you want as vector or map to compute async (pseudo parallel) values. Use map keys to rename keys within event coeffects map. For further reading see `inject-acofx`."
-  ([acofxs]
-   (inject-acofxs acofxs nil))
+  "Returns an interceptor that injects the async coeffects `acofxs` into
+   the event's coeffects. They run concurrently; the event handler runs
+   once all of them are done.
 
-  ([acofxs {:keys [error-dispatch] :as opts}]
+   Each of `acofxs` is a vector `[id value opts]` of an acofx registered
+   with [[reg-acofx]], the optional `value` for its handler -- like
+   re-frame's `inject-cofx` -- and an optional map of
 
-   (let [inject-id
-         (random-uuid)
+   - `:inject-key` -- the key in the coeffects, defaults to `id`. Needed
+     to inject the same acofx more than once.
+   - `:on-failure` -- event to dispatch on failure, the exception
+     appended.
 
-         acofxs-n-options
-         (->> acofxs
-              (normalize-acofxs)
-              (assoc opts :id inject-id, :acofxs))]
+   On failure the event handler does not run. The event dispatched is the
+   one the acofx handler named (see [[reg-acofx]]), else the injection's
+   `:on-failure`, else the global one (see
+   [[set-global-on-failure-event]]). Without any, the failure is logged.
 
-     (->interceptor
-      :id
-      :acoeffects
+   The event runs twice -- once to start the acofxs, once with their
+   values (once more per further injection on the same event).
+   Interceptors before this one see every run; their `:after`s run on
+   the aborted ones too, with no effects to act on.
 
-      :before
-      (fn [context]
-        (let [dispatch-id
-              (or (some-> context (:coeffects) (:event) (meta) (::dispatch-id))
-                  (random-uuid))
+       (rf/reg-event-fx ::init-view
+         [(inject-acofxs
+           [::http {:uri \"/a\"} {:inject-key :a}]
+           [::http {:uri \"/b\"} {:inject-key :b}])]
+         (fn [{:keys [db a b]} _]
+           {:db (assoc db ::a a, ::b b)}))"
+  [& acofxs]
+  (let [inject-id
+        (random-uuid)
 
-              context
-              (assoc-in context [:acoeffects :dispatch-id] dispatch-id)]
+        acofxs
+        (mapv normalize-acofx acofxs)]
 
-          (if-let [result (get-in @!results [dispatch-id inject-id])]
-            (update context :coeffects merge result)
-            (run-acofxs-n-abort-event! context acofxs-n-options))))
+    (rf/->interceptor
+     :id ::inject-acofxs
 
-      :after
-      (fn [context]
-        (when (fx-handler-run? context)
-          (->> context
-               (:acoeffects)
-               (:dispatch-id)
-               (swap! !results dissoc)))
-        context)))))
+     :before
+     (fn [context]
+       (let [context
+             (ensure-dispatch-id context)
+
+             parked
+             (parked-results context)]
+
+         (if (contains? parked inject-id)
+           (inject-results context (get parked inject-id))
+           (start-acofxs context inject-id acofxs)))))))
 
 (defn inject-acofx
-  "Given an async-coeffect (acofx) returns an interceptor whose `:before` adds to the `:coeffects` (map) by calling a pre-registered 'async coeffect handler' identified by `id`.
+  "Returns an interceptor that injects the single async coeffect `id`,
+   with `value` and `opts` as described in [[inject-acofxs]]."
+  {:arglists
+   '([id]
+     [id value]
+     [id value {:keys [on-failure inject-key]}])}
 
-  As first argument give the `id` of the acofx or an vector of `id` and `args`. `args` can be mixed of any val and fns. fns will be applied with coeffects and event. Computed args prepended with coeffects will be applied to acofx handler.
+  ([id]
+   (inject-acofx id nil))
 
-  As second optional argument give a map of options to carry a `:error-dispatch` vector, see also `set-global-error-dispatch`. `error-dispatch` will be called on error, event will be aborted.
+  ([id value]
+   (inject-acofx id value nil))
 
-  The previous association of a `async coeffect handler` with an `id` will have happened via a call to `reg-acofx` - generally on program startup. See also `reg-acofx-by-fx` to reuse effects as coeffects.
-
-  Within the created interceptor, this 'looked up' `async coeffect handler` will be called (within the `:before`) with arguments:
-
-  - the current value of `:coeffects`
-  - optionally, the given or computed args by `args`
-
-  This `coeffect handler` is expected to modify and return its first, `coeffects` argument.
-
-  **Example of `inject-acofx` and `reg-acofx` working together**
-
-
-  First - Early in app startup, you register a `async coeffect handler` for `:async-now`:
-
-      #!clj
-      (reg-acofx
-        :async-now                        ;; usage  (inject-acofx :async-now)
-        (fn async-coeffect-handler
-          [coeffect]
-          (go
-            (<! (timeout 1000))
-            (assoc coeffect :async-now (js/Date.)))))   ;; modify and return first arg
-
-  Second - Later, add an interceptor to an -fx event handler, using `inject-acofx`:
-
-      #!clj
-      (re-frame.core/reg-event-fx            ;; when registering an event handler
-        :event-id
-        [ ... (inject-acofx :async-now) ... ]  ;; <-- create an injecting interceptor
-        (fn event-handler
-          [coeffect event]
-            ;;... in here can access (:async-now coeffect) to obtain current async-now ...
-          )))
-
-  **Background**
-
-  `coeffects` are the input resources required by an event handler to perform its job. The two most obvious ones are `db` and `event`. But sometimes an event handler might need other resources maybe async resources.
-
-  Perhaps an event handler needs data from backend or some other async api.
-
-  If an event handler directly accesses these resources, it stops being pure and, consequently, it becomes harder to test, etc. So we don't want that.
-
-  Instead, the interceptor created by this function is a way to 'inject' 'necessary resources' into the `:coeffects` (map) subsequently given to the event handler at call time.
-
-  See also `reg-acofx`
-  "
-  ([acofx]
-   (inject-acofx acofx nil))
-
-  ([acofx {:keys [error-dispatch] :as opts}]
-   (inject-acofxs [acofx] opts)))
+  ([id value opts]
+   (inject-acofxs [id value opts])))
