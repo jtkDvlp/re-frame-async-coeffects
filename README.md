@@ -279,6 +279,11 @@ use -- so it can derive from the registration, down to removing keys:
                        (update initial-args :uri str "/details")))
 ```
 
+What that function returns replaces `:initial-args`. In 2.x its result was
+merged over them, so a function that only returns `{:uri ...}` now drops
+`:method` and everything else registered -- derive from `initial-args` as
+above.
+
 **`set-global-error-dispatch!` is now `set-global-on-failure-event`.** On
 failure the event dispatched is the one the acofx handler put under
 `::on-failure` into its exception, else the injection's `:on-failure`,
