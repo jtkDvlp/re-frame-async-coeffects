@@ -64,8 +64,7 @@ core.async-helpers).
 
 | Name | Bedeutung |
 |---|---|
-| `master` | Default-Branch, veröffentlichte 2.x-API (`v2.0.0`). |
-| `v3.0.0` | Umbau von Interna und API auf 3.0.0. PRs für 3.0 gehen hierhin. |
+| `master` | Default-Branch und Hauptzweig. PRs gehen hierhin. Was seit dem letzten Tag dazukam, steht im offenen Release-PR. |
 | Tags `v1.0.0`, `v1.0.1`, `v2.0.0` | Releases. Tags tragen ein `v`. |
 
 ## Release
