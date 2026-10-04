@@ -2,7 +2,7 @@
 ;; is what it finds the line by -- without it only the changelog moves on
 ;; and the package keeps the old version. What stands here is the last
 ;; release; the next one is decided by the commits since.
-(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "2.0.0" ; x-release-please-version
+(defproject net.clojars.jtkdvlp/re-frame-async-coeffects "3.0.0" ; x-release-please-version
   :description
   "re-frame interceptors to use async actions as coeffects for events"
 
