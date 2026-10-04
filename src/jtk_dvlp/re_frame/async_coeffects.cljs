@@ -307,13 +307,10 @@
           (assoc-in [:acoeffects :cleanup-scheduled?] true)))))
 
 (defn- abort-event
+  "Ends the run before the handler. The `:after`s of the interceptors so
+   far still run, with no effects to act on."
   [context]
-  (-> context
-      (update :queue empty)
-      ;; NOTE: This interceptor is already on the stack. Dropping it skips
-      ;; its own `:after`; the `:after`s of the interceptors before it
-      ;; still run, with no effects to act on.
-      (update :stack rest)))
+  (update context :queue empty))
 
 (defn- event-to-redispatch
   [context]
@@ -390,7 +387,8 @@
 
    The event runs twice -- once to start the acofxs, once with their
    values (once more per further `inject-acofxs` on the same event).
-   Interceptors before this one see every run.
+   Interceptors before this one see every run; their `:after`s run on
+   the aborted ones too, with no effects to act on.
 
        (rf/reg-event-fx ::init-view
          [(inject-acofxs

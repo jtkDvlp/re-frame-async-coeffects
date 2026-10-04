@@ -5,6 +5,7 @@
 
    [re-frame.core :as rf]
    [re-frame.db :as rf-db]
+   [re-frame.interceptor :as rf-interceptor]
 
    [jtk-dvlp.async :as async]
    [jtk-dvlp.re-frame.async-coeffects :as acofxs]
@@ -140,3 +141,10 @@
         (is (async/<! (<eventually #(seq @!handled))))
         (is (= [:value] @!handled))
         (is (not (running?)))))))
+
+(deftest is-a-single-interceptor
+  ;; A vector of interceptors cannot be registered as global
+  ;; interceptor, nor composed into another one.
+  (is (rf-interceptor/interceptor? (acofx-tasks/inject-acofx ::gated)))
+  (is (rf-interceptor/interceptor?
+       (acofx-tasks/inject-acofxs [::gated] [::gated nil {:inject-key :g}]))))
