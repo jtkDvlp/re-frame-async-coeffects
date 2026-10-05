@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.1.0](https://github.com/jtkDvlp/re-frame-async-coeffects/compare/v3.0.0...v3.1.0) (2026-10-05)
+
+
+### Features
+
+* accept acofxs keyed by a map in inject-acofxs ([e4c7812](https://github.com/jtkDvlp/re-frame-async-coeffects/commit/e4c78128d006171fdcddb9d62b4e8f443f3e3694))
+
+
+### Documentation
+
+* show acofxs keyed by a map ([9837213](https://github.com/jtkDvlp/re-frame-async-coeffects/commit/9837213056df0bc9bc80f0f426110de856cbc729))
+
 ## [3.0.0](https://github.com/jtkDvlp/re-frame-async-coeffects/compare/v2.0.0...v3.0.0) (2026-10-04)
 
 
