@@ -100,6 +100,9 @@
 
    One interceptor, so it serves as global interceptor too -- then
    `as-task` has to be a global one registered before it."
+  {:arglists
+   '([& acofxs]
+     [acofxs-by-inject-key])}
   [& acofxs]
   (compose-interceptors
    ::inject-acofxs

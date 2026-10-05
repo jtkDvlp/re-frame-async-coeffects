@@ -142,6 +142,25 @@
         (is (= [:value] @!handled))
         (is (not (running?)))))))
 
+(deftest takes-acofxs-keyed-by-a-map
+  (async done
+    (run-async done
+      (async/go
+        (reg-gated-acofx! false)
+        (rf/reg-event-fx ::event
+          [(tasks/as-task :loading)
+           (acofx-tasks/inject-acofxs {:gated [::gated]})]
+          (fn [{:keys [gated]} _]
+            (record-handled! gated)
+            {}))
+
+        (rf/dispatch [::event])
+        (is (async/<! (<eventually running?)))
+        (release-acofx!)
+        (is (async/<! (<eventually #(seq @!handled))))
+        (is (async/<! (<eventually (complement running?))))
+        (is (= [:value] @!handled))))))
+
 (deftest is-a-single-interceptor
   ;; A vector of interceptors cannot be registered as global
   ;; interceptor, nor composed into another one.

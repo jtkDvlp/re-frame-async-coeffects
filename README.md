@@ -51,8 +51,8 @@ case is one event, and both requests run concurrently:
 
 (reg-event-fx ::init-my-view
   [(inject-acofxs
-    [::http {:uri "/some-data"} {:inject-key :some-data}]
-    [::http {:uri "/other-data"} {:inject-key :other-data}])]
+    {:some-data [::http {:uri "/some-data"}]
+     :other-data [::http {:uri "/other-data"}]})]
   (fn [{:keys [db some-data other-data]} _]
     {:db (assoc db ::some-data some-data, ::other-data other-data)}))
 ```
@@ -70,7 +70,8 @@ Full reference per namespace:
     coeffects before its handler runs.
 
   * **Concurrent loading.** Several acofxs of one injection run at the
-    same time; the event handler runs once all of them are done.
+    same time; the event handler runs once all of them are done. A map
+    names the key each value lands under in the coeffects.
 
   * **Effects as coeffects.** `reg-acofx-by-fx` turns an effect that
     reports through events -- such as
@@ -188,6 +189,21 @@ See in repo [your-project.cljs](https://github.com/jtkDvlp/re-frame-async-coeffe
            (assoc ::message nil))})))
 ```
 
+### Keying acofxs by a map
+
+Instead of one vector per acofx, `inject-acofxs` takes a single map of
+key in the coeffects to `[id value opts]`. The map keys replace
+`:inject-key`; giving both is an error.
+
+```clojure
+(rf/reg-event-fx ::init-my-view
+  [(rf-acofxs/inject-acofxs
+    {:user [::http {:uri "/user"}]
+     :settings [::http {:uri "/settings"} {:on-failure [::failed]}]})]
+  (fn [{:keys [db user settings]} _]
+    {:db (assoc db ::user user, ::settings settings)}))
+```
+
 ### Keeping a task running (re-frame-tasks)
 
 With [re-frame-tasks](https://github.com/jtkDvlp/re-frame-tasks), use the
@@ -247,8 +263,9 @@ new `:on-failure-event` names the event to dispatch when the effect fails.
 **Injection takes `[id value opts]` per acofx, like `inject-cofx`.**
 Instead of spread arguments, the handler gets one value. The key in the
 coeffects and the failure event are options of each acofx, not of the
-whole injection. The map form of `inject-acofxs` is gone; `:inject-key`
-replaces its keys.
+whole injection. The map form of `inject-acofxs` stays (since 3.1), but
+without the second argument: the failure event moves into the opts of
+each acofx.
 
 ```clojure
 ;; 2.x
@@ -256,6 +273,9 @@ replaces its keys.
                 :b [::http {:uri "/b"}]}
                {:error-dispatch [::failed]})
 ;; 3.x
+(inject-acofxs {:a [::http {:uri "/a"} {:on-failure [::failed]}]
+                :b [::http {:uri "/b"} {:on-failure [::failed]}]})
+;; or
 (inject-acofxs
  [::http {:uri "/a"} {:inject-key :a, :on-failure [::failed]}]
  [::http {:uri "/b"} {:inject-key :b, :on-failure [::failed]}])
